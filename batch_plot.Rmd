@@ -1,0 +1,71 @@
+---
+title: "Batch Plot"
+author: "Eric Bridgeford"
+date: "8/3/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require(ggplot2)
+require(tidyverse)
+require(dplyr)
+require(grid)
+```
+
+```{r}
+batch_dat <- read.csv('./data/batch_results.csv') %>%
+  pivot_longer(Effect.Batch:pvalue.Sex, names_to=c(".value", "Type"), names_pattern="(.+)\\.(.+$)") %>%
+  mutate(Transform=recode_factor(Transform, combat="ComBat", "raw"="Raw", "ptr"="Ranked", "zscore"="Z-Score"),
+         Transform=factor(Transform, levels=c("Raw", "Z-Score", "Ranked", "ComBat"), ordered = TRUE)) %>%
+  select(-X)
+```
+
+```{r, fig.height=6, fig.width=8}
+batch_dat %>%
+  ggplot(aes(Effect, group=Type, color=Type)) +
+  geom_density(aes(y=..scaled..)) +
+  geom_rug(length=unit(.05, "npc")) +
+  facet_grid("Transform~.") +
+  theme_bw() +
+  xlab("Effect Magnitude") +
+  ylab("Density") +
+  ggtitle("Examining Impact of Post-Processing Strategy on Batch Mitigation")
+```
+
+
+```{r, fig.height=6, fig.width=7}
+batch_dat %>%
+  group_by(Dataset1, Dataset2, Transform) %>%
+  pivot_wider(c("Dataset1", "Dataset2", "Transform"), names_from="Type", values_from="Effect") %>%
+  mutate(Difference = Sex - Batch) %>%
+  ggplot(aes(Difference)) +
+  geom_density(aes(y=..scaled..)) +
+  geom_rug(length=unit(.05, "npc")) +
+  facet_grid("Transform~.") +
+  theme_bw() +
+  xlab("Difference (Sex Effect - Batch Effect)") +
+  ylab("Density") +
+  ggtitle("What do the paired difference in effects look like?")
+```
+
+```{r, fig.height=5, fig.width=7}
+raw.batch <- batch_dat %>%
+  filter(Transform == "Raw" & Type != "Batch") %>%
+  rename("Effect.raw"=Effect) %>%
+  select(-Transform)
+
+matched.batch <- batch_dat %>%
+  filter(Transform != "Raw" & Type != "Batch") %>%
+  left_join(raw.batch, by=c("Dataset1", "Dataset2", "Type")) %>%
+  mutate(Difference=Effect - Effect.raw)
+
+matched.batch %>%
+  ggplot(aes(Difference)) +
+    geom_density(aes(y=..scaled..)) +
+    geom_rug(length=unit(.05, "npc")) +
+    facet_grid("Transform~.") +
+    theme_bw() +
+    xlab("Sex Effect Difference (After Batch Removal - Raw)") +
+    ylab("Density") +
+    ggtitle("Does Batch Correction Improve Sex Effect?")
+```
