@@ -1,0 +1,187 @@
+---
+title: "Batch Analysis"
+author: "Eric Bridgeford"
+date: "8/10/2020"
+output: html_document
+toc: true
+toc_float: true
+toc_collapsed: true
+toc_depth: 3
+number_sections: true
+theme: lumen
+---
+
+```{r setup, include=FALSE}
+require(ggplot2)
+require(tidyverse)
+require(dplyr)
+require(grid)
+```
+
+```{r}
+batch_dat <- read.csv('./data/batch_results.csv') %>%
+  pivot_longer(Effect.Batch:pvalue.Age, names_to=c(".value", "Type"), names_pattern="(.+)\\.(.+$)") %>%
+  mutate(Dxfm=recode_factor(Dxfm, combat="ComBat", "raw"="Raw", "ptr"="Ranked", "zscore"="Z-Score"),
+         Dxfm=factor(Dxfm, levels=c("Raw", "Z-Score", "Ranked", "ComBat"), ordered = TRUE),
+         Sxfm=recode_factor(Sxfm, "raw"="Raw", "ptr"="Ranked"))
+```
+
+# Sex
+
+```{r, fig.height=6, fig.width=8}
+batch_dat.sex = batch_dat %>%
+  filter(Type != "Age")
+
+batch_dat.sex %>%
+  ggplot(aes(Effect, group=Type, color=Type)) +
+  geom_density(aes(y=..scaled..)) +
+  geom_rug(length=unit(.05, "npc")) +
+  facet_grid("Dxfm~Sxfm") +
+  theme_bw() +
+  xlab("Effect Magnitude") +
+  ylab("Density") +
+  ggtitle("Examining Impact of Post-Processing Strategy on Batch Mitigation")
+```
+
+```{r, fig.height=6, fig.width=7}
+(batch <- batch_dat.sex %>%
+  group_by(Dataset1, Dataset2, Sxfm, Dxfm) %>%
+  pivot_wider(c("Dataset1", "Dataset2", "Sxfm", "Dxfm"), names_from="Type", values_from="Effect") %>%
+  mutate(Difference = Sex - Batch) %>%
+  group_by(Sxfm, Dxfm)) %>%
+  ggplot() +
+    geom_density(data=batch, aes(Difference, y=..scaled..)) +
+    geom_text(data=batch %>% summarise(prop=mean(Difference > 0, na.rm=TRUE)), aes(label=sprintf("%.1f percent > 0", 100*prop), x=0, y=.5)) +
+    geom_rug(length=unit(.05, "npc")) +
+    facet_grid("Dxfm~Sxfm") +
+    theme_bw() +
+    xlab("Difference (Sex Effect - Batch Effect)") +
+    ylab("Density") +
+    ggtitle("What do the paired difference in effects look like?")
+```
+
+
+```{r, fig.height=5, fig.width=7}
+raw.batch <- batch_dat.sex %>%
+  filter(Dxfm == "Raw" & Type != "Batch") %>%
+  rename("Effect.raw"=Effect)
+
+matched.batch <- batch_dat.sex %>%
+  filter(Dxfm != "Raw" & Type != "Batch") %>%
+  left_join(raw.batch, by=c("Dataset1", "Dataset2", "Type", "Sxfm")) %>%
+  mutate(Difference=Effect - Effect.raw)
+
+matched.batch %>%
+  ggplot() +
+    geom_density(data=matched.batch, aes(Difference, y=..scaled..)) +
+    geom_rug(data=matched.batch, aes(Difference), length=unit(.05, "npc")) +
+    geom_text(data=matched.batch %>% group_by(Dxfm.x, Sxfm) %>% summarise(prop=mean(Difference > 0, na.rm=TRUE)),
+              aes(label=sprintf("%.1f percent > 0", 100*prop), x=0, y=.5)) +
+    facet_grid("Dxfm.x~Sxfm") +
+    theme_bw() +
+    xlab("Sex Effect Difference (After Batch Removal - Raw)") +
+    ylab("Density") +
+    ggtitle("Does Batch Correction Improve Sex Effect?")
+```
+
+# Age
+
+```{r, fig.height=6, fig.width=8}
+batch_dat.age = batch_dat %>%
+  filter(Type != "Sex")
+
+batch_dat.age %>%
+  ggplot(aes(Effect, group=Type, color=Type)) +
+  geom_density(aes(y=..scaled..)) +
+  geom_rug(length=unit(.05, "npc")) +
+  facet_grid("Dxfm~Sxfm") +
+  theme_bw() +
+  xlab("Effect Magnitude") +
+  ylab("Density") +
+  ggtitle("Examining Impact of Post-Processing Strategy on Batch Mitigation")
+```
+
+```{r, fig.height=6, fig.width=7}
+(batch <- batch_dat.age %>%
+  group_by(Dataset1, Dataset2, Sxfm, Dxfm) %>%
+  pivot_wider(c("Dataset1", "Dataset2", "Sxfm", "Dxfm"), names_from="Type", values_from="Effect") %>%
+  mutate(Difference = Age - Batch) %>%
+  group_by(Sxfm, Dxfm)) %>%
+  ggplot() +
+    geom_density(data=batch, aes(Difference, y=..scaled..)) +
+    geom_text(data=batch %>% summarise(prop=mean(Difference > 0, na.rm=TRUE)), aes(label=sprintf("%.1f percent > 0", 100*prop), x=0, y=.5)) +
+    geom_rug(length=unit(.05, "npc")) +
+    facet_grid("Dxfm~Sxfm") +
+    theme_bw() +
+    xlab("Difference (Age Effect - Batch Effect)") +
+    ylab("Density") +
+    ggtitle("What do the paired difference in effects look like?")
+```
+
+
+```{r, fig.height=5, fig.width=7}
+raw.batch <- batch_dat.age %>%
+  filter(Dxfm == "Raw" & Type != "Batch") %>%
+  rename("Effect.raw"=Effect)
+
+matched.batch <- batch_dat.age %>%
+  filter(Dxfm != "Raw" & Type != "Batch") %>%
+  left_join(raw.batch, by=c("Dataset1", "Dataset2", "Type", "Sxfm")) %>%
+  mutate(Difference=Effect - Effect.raw)
+
+matched.batch %>%
+  ggplot() +
+    geom_density(data=matched.batch, aes(Difference, y=..scaled..)) +
+    geom_rug(data=matched.batch, aes(Difference), length=unit(.05, "npc")) +
+    geom_text(data=matched.batch %>% group_by(Dxfm.x, Sxfm) %>% summarise(prop=mean(Difference > 0, na.rm=TRUE)),
+              aes(label=sprintf("%.1f percent > 0", 100*prop), x=0, y=.5)) +
+    facet_grid("Dxfm.x~Sxfm") +
+    theme_bw() +
+    xlab("Age Effect Difference (After Batch Removal - Raw)") +
+    ylab("Density") +
+    ggtitle("Does Batch Correction Improve Age Effect?")
+```
+
+# Statistics
+
+```{r}
+statistic.dat <- read.csv('./data/batch_statistics.csv') %>%
+  mutate(Clustering = gsub("[()]", "", Clustering),
+         Clustering=gsub("j", "i", Clustering),
+         Clustering = as.complex(Clustering),
+         Clustering = Mod(Clustering)) %>%
+  pivot_longer(Clustering:Homotopic, names_to="Type", values_to="Value")
+```
+
+```{r}
+statistic.dat.After <- statistic.dat %>%
+  filter(Dxfm!="raw") %>%
+  rename(Value.After=Value) %>%
+  dplyr::select(-X, -Subject, -Retest, -Ix)
+
+statistic.dat.Before <- statistic.dat %>%
+  filter(Dxfm=="raw") %>%
+  rename(Value.Before=Value) %>%
+  dplyr::select(-X, -Subject, -Retest, -Ix, -Dxfm)
+
+statistic.dat.cmp <- statistic.dat.After %>%
+  left_join(statistic.dat.Before, by=c("Dataset", "Fullname", "Sxfm", "Type")) %>%
+  mutate(Difference=Value.After - Value.Before) %>%
+  pivot_longer(Value.After:Value.Before, names_to="Time", values_to="Value")
+```
+
+```{r}
+plots <- lapply(c("Clustering", "Degree"), function(type) {
+    lapply(unique(statistic.dat$Dataset), function(dataset) {
+    statistic.dat.cmp %>%
+      filter(Dataset == dataset & Type == type) %>%
+      ggplot(aes(x=factor(Time), y=Value, group=factor(Fullname))) +
+        geom_line() +
+        facet_grid("Dxfm~Sxfm") +
+        ggtitle(sprintf("Dataset: %s, Statistic: %s", dataset, type)) +
+        theme_bw()
+  })
+})
+
+plots
+```
