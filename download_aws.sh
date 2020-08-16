@@ -1,7 +1,7 @@
 #!/bin/bash
 
 awsdir="s3://ndmg-data/fm2g-edgelists/"
-outdir="/data/corr/m2g/fmri/"
+outdir=$1
 mkdir -p $outdir
 conndir="_mask_desikan_space-MNI152NLin6_res-2x2x2_mask_file_..m2g_atlases..atlases..label..Human..desikan_space-MNI152NLin6_res-2x2x2.nii.gz"
 
