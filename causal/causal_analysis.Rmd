@@ -2,7 +2,12 @@
 title: "Causal Analysis for fMRI Batch Correction"
 author: "Eric Bridgeford"
 date: "8/15/2020"
-output: html_document
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
 header-includes:
   - \usepackage{~/Documents/me/biostat_template/style/ericmath}
 ---
@@ -19,6 +24,7 @@ require(dplyr)
 require(ggridges)
 require(multcomp)
 require(gridExtra)
+require(parallel)
 select <- dplyr::select; mutate <- dplyr::mutate; arrange=dplyr::arrange
 ```
 
@@ -32,7 +38,7 @@ raw.stat <- read.csv('../data/summary/batch_statistics.csv') %>%
          Sxfm=factor(Sxfm, levels=c("Raw", "Ranked"), ordered=TRUE), 
          Dxfm=factor(Dxfm, levels=c("Raw", "Ranked", "Z-Score", "ComBat"), ordered=TRUE),
          Dataset=factor(Dataset)) %>%
-  mutate(Homophilic_mean=Homophilic_mean - Heterophilic_mean, 
+  mutate(Homophilic_Difference=Homophilic_mean - Heterophilic_mean, 
          Homotopic_Difference=Homotopic_mean - Heterotopic_mean) %>%
   pivot_longer(Homophilic_mean:Homotopic_Difference,
                names_to=c("Community", "Measure"), names_pattern="(.+)_(.+$)") %>%
@@ -45,6 +51,8 @@ raw.gr <- read.csv('../data/summary/proc_graph.csv') %>%
          Sxfm=factor(Sxfm, levels=c("Raw", "Ranked"), ordered=TRUE),
          Dxfm=factor(Dxfm, levels=c("Raw", "Ranked", "Z-Score", "ComBat"), ordered=TRUE))
 ```
+
+# Algorithmic Details
 
 ```{r}
 causal_ana <- function(ref.stat, 
@@ -80,11 +88,11 @@ causal_ana <- function(ref.stat,
     scale_x_continuous(name=measure) +
     guides(fill=FALSE)
   
-  test.res <- do.call(rbind, lapply(as.character(unique(red.stat$Dataset)), function(dataset) {
+  test.res <- do.call(rbind, mclapply(as.character(unique(red.stat$Dataset)), function(dataset) {
     ds.stat <- red.stat %>%
       mutate(Treatment = ifelse(Dataset == dataset, 1, 0))
     # 4:1 optimal ratio matching
-    match_obj <- matchit(Treatment ~ factor(Sex) + Age, data=ds.stat, method="optimal", ratio=5)
+    match_obj <- matchit(Treatment ~ factor(Sex) + Age, data=ds.stat, method="optimal", ratio=4)
     matches <- match.data(match_obj)  # ... and fetch the matches themselves
     
     marginal.mod <- lm(value ~ factor(Treatment) + factor(Sex) + Age, data=ds.stat)
@@ -129,7 +137,7 @@ causal_ana <- function(ref.stat,
                                CI.upper=conf.mat[3], CI.lower=conf.mat[2],
                                Estimate=m.sum$coefficients[1], pvalue=m.sum$pvalues[1])
     return(rbind(conf.mar.res, conf.um.res, conf.mat.res))
-  })) %>%
+  }, mc.cores=detectCores() - 1)) %>%
     mutate(Approach=sprintf("%s, %s", Data, Method),
            or.str=sprintf("%.4f, (%.4f-%.4f), %s", Estimate, CI.lower, CI.upper, 
                           ifelse(pvalue < .001, "<.001", sprintf("%.3f", pvalue))),
@@ -236,57 +244,247 @@ Inference is instead performed on:
 \begin{align*}
   \beta_{trt} = \sum_{i \in [n_t]}w_i \beta_{trt, i'}
 \end{align*}
-Where $w_i$ is a weight vector which sums to $1$. The test employed is the two-sided $t$ test, with $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$.
+Where $w_i$ is a weight vector which sums to $1$. The test employed is the two-sided $t$ test, with $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$. For the purposes of this notebook, $w_i$ is typically taken to be $\frac{1}{n_t}$; that is, $\beta_{trt}$ is an equally-weighted linear combination of the per-treated-individual coefficient estimates.
 
-# Raw Data
+### Matching Strategies
 
-### No Batch Correction
+The matching strategy employed in this notebook is $4: 1$ optimal ratio matching using the `MatchIt` package.
+
+# Homotopic
+
+The outcomes that concern the homotopic (bilateral) and heterotopic (non-bilateral) connectivity.
+
+## Homotopic Mean
+
+Outcomes correspond to the mean connectivity in the homotopic (bilateral) edges.
+
+### Raw Data {.tabset}
+
+#### No Batch Correction
 
 ```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
 plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw"))
 ```
 
-### Z-Scored
+#### Z-Scored
 
 ```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
 plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Z-Score"))
 ```
 
-### Ranked
+#### Ranked
 
 ```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Z-Score"))
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Ranked"))
 ```
 
-### ComBat
+#### ComBat
 
 ```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Z-Score"))
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="ComBat"))
 ```
 
 
-# Ranked Data
+### Ranked Data {.tabset}
 
-### No Batch Correction
+#### No Batch Correction
 
 ```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
 plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw"))
 ```
 
-### Z-Scored
+#### Z-Scored
 
 ```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
 plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Z-Score"))
 ```
 
-### Ranked
+#### Ranked
 
 ```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Z-Score"))
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Ranked"))
 ```
 
-### ComBat
+#### ComBat
 
 ```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Z-Score"))
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="ComBat"))
+```
+
+
+The outcomes that concern the homotopic connectivity.
+
+## Homotopic Difference
+
+Outcomes correspond to the difference in mean connectivity in the homotopic (bilateral) edges and the heterotopic (non-bilateral).
+
+### Raw Data {.tabset}
+
+#### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", measure="Difference"))
+```
+
+#### Z-Scored
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Z-Score", measure="Difference"))
+```
+
+#### Ranked
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Ranked", measure="Difference"))
+```
+
+#### ComBat
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="ComBat", measure="Difference"))
+```
+
+
+### Ranked Data {.tabset}
+
+#### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", measure="Difference"))
+```
+
+#### Z-Scored
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Z-Score", measure="Difference"))
+```
+
+#### Ranked
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Ranked", measure="Difference"))
+```
+
+#### ComBat
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="ComBat", measure="Difference"))
+```
+
+# Homophilic
+
+Communities of interest are the homophilic (same-hemisphere) and heterophilic (different-hemisphere) edges.
+
+## Homophilic Mean
+
+The outcome is the mean homophilic (same-hemisphere) connectivity.
+
+### Raw Data {.tabset}
+
+#### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", community="Homophilic"))
+```
+
+#### Z-Scored
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Z-Score", community="Homophilic"))
+```
+
+#### Ranked
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Ranked", community="Homophilic"))
+```
+
+#### ComBat
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="ComBat", community="Homophilic"))
+```
+
+
+### Ranked Data {.tabset}
+
+#### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", community="Homophilic"))
+```
+
+#### Z-Scored
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Z-Score", community="Homophilic"))
+```
+
+#### Ranked
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Ranked", community="Homophilic"))
+```
+
+#### ComBat
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="ComBat", community="Homophilic"))
+```
+
+## Homophilic Difference
+
+The outcome is the difference in connectivity between homophilic (same-hemisphere) and heterophilic (different-hemisphere) edges.
+
+### Raw Data {.tabset}
+
+#### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", community="Homophilic", measure="Difference"))
+```
+
+#### Z-Scored
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Z-Score", community="Homophilic", measure="Difference"))
+```
+
+#### Ranked
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Ranked", community="Homophilic", measure="Difference"))
+```
+
+#### ComBat
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="ComBat", community="Homophilic", measure="Difference"))
+```
+
+
+### Ranked Data {.tabset}
+
+#### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", community="Homophilic", measure="Difference"))
+```
+
+#### Z-Scored
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Z-Score", community="Homophilic", measure="Difference"))
+```
+
+#### Ranked
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Ranked", community="Homophilic", measure="Difference"))
+```
+
+#### ComBat
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="ComBat", community="Homophilic", measure="Difference"))
 ```
