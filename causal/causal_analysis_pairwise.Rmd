@@ -1,0 +1,550 @@
+---
+title: "Causal Analysis Pairwise"
+author: "Eric Bridgeford"
+date: "8/22/2020"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+require(tidyverse)
+require(grid)
+require(MatchIt)
+require(dplyr)
+require(ggridges)
+require(multcomp)
+require(gridExtra)
+require(parallel)
+select <- dplyr::select; mutate <- dplyr::mutate; arrange=dplyr::arrange
+```
+
+# Data Pre-Processing
+
+```{r}
+raw.stat <- read.csv('../data/summary/batch_statistics.csv') %>%
+  select(-Clustering, -Degree) %>%
+  mutate(Sxfm=recode_factor(Sxfm, "raw"="Raw", "ptr"="Ranked"), 
+         Dxfm=recode_factor(Dxfm, "raw"="Raw", "ptr"="Ranked", "zscore"="Z-Score", "combat"="ComBat"),
+         Sxfm=factor(Sxfm, levels=c("Raw", "Ranked"), ordered=TRUE), 
+         Dxfm=factor(Dxfm, levels=c("Raw", "Ranked", "Z-Score", "ComBat"), ordered=TRUE),
+         Dataset=factor(Dataset)) %>%
+  mutate(Homophilic_Difference=Homophilic_mean - Heterophilic_mean, 
+         Homotopic_Difference=Homotopic_mean - Heterotopic_mean) %>%
+  pivot_longer(Homophilic_mean:Homotopic_Difference,
+               names_to=c("Community", "Measure"), names_pattern="(.+)_(.+$)") %>%
+  mutate(Dataset=factor(Dataset, levels=sort(unique(Dataset)), ordered=TRUE))
+
+raw.gr <- read.csv('../data/summary/proc_graph.csv') %>%
+  mutate(Column=factor(Column, levels=1:70, ordered=TRUE), Row=factor(Row, levels=1:70, ordered=TRUE),
+         Sxfm=recode_factor(Sxfm, "raw"="Raw", "ptr"="Ranked"), 
+         Dxfm=recode_factor(Dxfm, "raw"="Raw", "ptr"="Ranked", "zscore"="Z-Score", "combat"="ComBat"),
+         Sxfm=factor(Sxfm, levels=c("Raw", "Ranked"), ordered=TRUE),
+         Dxfm=factor(Dxfm, levels=c("Raw", "Ranked", "Z-Score", "ComBat"), ordered=TRUE))
+
+continent <- c("IBATRT"="NA", "Uta1"="NA", "IPCAS_2"="AS", "SWU1"="AS", "UWM"="NA", "XHCUMS"="AS", "SWU4"="AS",
+               "BNU2"="AS", "IPCAS_3"="AS", "SWU3"="AS", "IPCAS_4"="AS", "NYU_2"="NA", "IPCAS_1"="AS",
+               "IPCAS_7"="AS", "UPSM_1"="NA", "IACAS_1"="AS", "IPCAS_5"="AS", "NYU_1"="NA", "BNU1"="AS",
+               "MRN_1"="NA", "BNU3"="AS", "HNU1"="AS", "SWU2"="AS", "IPCAS_8"="AS", "JHNU"="AS", "IPCAS_6"="AS")
+
+raw.stat$Continent <- continent[raw.stat$Dataset]
+```
+
+# Algorithmic Details
+
+```{r}
+causal_ana <- function(ref.stat, 
+                       ref.gr, 
+                       raw.dat=NULL,
+                       sxfm="Raw", 
+                       dxfm="Raw", 
+                       community="Homotopic", 
+                       measure="mean", 
+                       pos.scale=.25,
+                       alpha=.05) {
+  # subset the data on the transforms of interest at the subject and dataset level
+  red.stat <- ref.stat %>%
+    filter(Sxfm == sxfm & Dxfm == dxfm & Community == community & Measure == measure)
+  
+  red.gr <- ref.gr %>%
+    filter(Sxfm == sxfm & Dxfm == dxfm)
+  
+  # generate plot of reference connectome
+  conn.plt <- red.gr %>%
+    ggplot(aes(x=Row, y=Column, fill=Value)) +
+    geom_tile() +
+    scale_x_discrete(breaks=c(1, 70), name="ROI") +
+    scale_y_discrete(breaks=c(1, 70), name="ROI") +
+    scale_fill_gradient(low="#ffffff", high="#33007b") +
+    ggtitle("(A) Reference Connectome") +
+    theme_bw()
+  # plot of statistic magnitudes, per-dataset
+  ridges.plt <- red.stat %>%
+    ggplot(aes(value, y=Dataset, fill=Dataset)) +
+    geom_density_ridges() +
+    theme_bw() +
+    ggtitle("(B) Statistic, by-batch") +
+    scale_x_continuous(name=measure) +
+    guides(fill=FALSE)
+  
+  datasets <- as.character(unique(red.stat$Dataset))
+  test.res <- do.call(rbind, mclapply(datasets, function(dataseti) {
+    ds.stat <- red.stat %>%
+      mutate(Treatment = ifelse(Dataset == dataseti, 1, 0))
+    n.i <- sum(ds.stat$Treatment)
+    dsets.noti <- datasets[datasets != dataseti]
+    do.call(rbind, lapply(dsets.noti, function(datasetj) {
+      tryCatch({
+        dsij.stat <- ds.stat %>%
+          filter(Dataset %in% c(dataseti, datasetj))
+        n.j <- sum(dsij.stat$Treatment == 0)
+        if ((n.i > n.j) || (continent[dataseti] != continent[datasetj])) {
+          return(NULL)
+        }
+        
+        # 1:1 optimal ratio matching
+        match_obj <- matchit(Treatment ~ factor(Sex) + Age, data=dsij.stat, method="optimal", ratio=1)
+        matches <- match.data(match_obj)  # ... and fetch the matches themselves
+        
+        marginal.mod <- lm(value ~ factor(Treatment) + factor(Sex) + Age, data=dsij.stat)
+        conf.mar <- confint(marginal.mod, parm="factor(Treatment)1", level=.95)
+        colnames(conf.mar) <- c("CI.upper", "CI.lower")
+        mar.sum <- summary(marginal.mod)$coefficients
+        conf.mar.res <- data.frame(Data="Unmatched", Method="Marginal", Dataset.Ref=dataseti, 
+                                   Dataset.Tgt=datasetj, Estimate=mar.sum["factor(Treatment)1", "Estimate"])
+        
+        # linear regression model on the matched subgroup, but marginalized
+        if (length(unique(matches$Sex)) == 1) {
+          unmatched.mod <- lm(value ~ factor(Treatment) + Age, data=matches)
+          # linear regression model with intercept for each subclass, and a slope estimate for the treated variable
+          matched.mod <- lm(value ~ factor(subclass) + factor(subclass):factor(Treatment) + Age, data=matches)
+        } else {
+          unmatched.mod <- lm(value ~ factor(Treatment) + factor(Sex) + Age, data=matches)
+          # linear regression model with intercept for each subclass, and a slope estimate for the treated variable
+          matched.mod <- lm(value ~ factor(subclass) + factor(subclass):factor(Treatment), data=matches)
+        }
+        conf.um <- confint(unmatched.mod, parm="factor(Treatment)1", level=.95)
+        colnames(conf.um) <- c("CI.upper", "CI.lower")
+        um.sum <- summary(unmatched.mod)$coefficients
+        conf.um.res <- data.frame(Data="Matched", Method="Marginal", Dataset.Ref=dataseti,
+                                  Dataset.Tgt=datasetj, Estimate=um.sum["factor(Treatment)1", "Estimate"])
+        
+        
+        # take linear combination of slope coefficients for treatment variable
+        coefeq <- matrix(data=as.numeric(grepl("Treatment", names(matched.mod$coefficients))),
+                         nrow=1, ncol=length(matched.mod$coefficients))
+        colnames(coefeq) <- names(matched.mod$coefficients)
+        coefeq <- coefeq/sum(coefeq)
+        
+        mat.est <- coefeq %*% matrix(matched.mod$coefficients, ncol=1)
+        conf.mat.res <- data.frame(Data="Matched", Method="Matched", Dataset.Ref=dataseti,
+                                   Dataset.Tgt=datasetj, Estimate=mat.est)
+        return(rbind(conf.mar.res, conf.um.res, conf.mat.res))
+      }, error=function(e) {return(NULL)})
+    }))
+  }, mc.cores=detectCores() - 1)) %>%
+    mutate(Approach=sprintf("%s, %s", Data, Method),
+           Approach=factor(Approach, levels=c("Unmatched, Marginal", "Matched, Marginal",
+                                              "Matched, Matched"), ordered=TRUE),
+           Dataset.Ref=factor(Dataset.Ref, levels=levels(raw.stat$Dataset), ordered=TRUE)) %>%
+    arrange(Dataset.Ref, Approach) %>%
+    group_by(Dataset.Ref) %>%
+    mutate(num.appr = as.numeric(Approach),
+           Position.Offset=pos.scale*(num.appr - mean(num.appr))/(max(num.appr) - min(num.appr)),
+           yintercept=as.numeric(Dataset.Ref) + Position.Offset)
+  
+  left.plt <- test.res %>%
+    ggplot(aes(color=Dataset.Ref, shape=Approach)) +
+      geom_point(aes(x=Estimate, y=yintercept, shape=Approach), size=.9) +
+      scale_y_continuous(breaks=1:length(levels(ref.stat$Dataset)),
+                         labels=levels(test.res$Dataset.Ref), name="Dataset") +
+      geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
+      xlab("Estimated Effect") +
+      guides(color=FALSE) +
+      theme_bw() +
+      ggtitle("(C) Forest Plot")
+  
+  result = list()
+  if (is.null(raw.dat)) {
+    result$raw = test.res
+    g.plt = arrangeGrob(arrangeGrob(conn.plt, ridges.plt, widths=c(.55, .45), nrow=1),
+                arrangeGrob(left.plt),
+                heights=c(.3, .7))
+    result$raw <- test.res
+  } else {
+    rezz <- test.res %>%
+      rename(Estimate.Xfm=Estimate) %>%
+      left_join(raw.dat %>% rename(Estimate.Raw=Estimate) %>% select(Approach, Dataset.Ref, Dataset.Tgt, Estimate.Raw),
+                by=c("Dataset.Ref", "Dataset.Tgt", "Approach")) %>%
+      mutate(Abs.Diff=abs(Estimate.Xfm) - abs(Estimate.Raw))
+    
+    plt.cmp <- rezz %>%
+      ggplot(aes(color=Dataset.Ref, shape=Approach)) +
+        geom_point(aes(x=Abs.Diff, y=yintercept, shape=Approach), size=.9) +
+        scale_y_continuous(breaks=1:length(levels(ref.stat$Dataset)),
+                           labels=levels(test.res$Dataset.Ref), name="Dataset") +
+        geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
+        xlab("|Reference| - |Raw|") +
+        guides(color=FALSE) +
+        theme_bw() +
+        ggtitle("(D) Comparison of Magnitude of Effect")
+    
+    tabl.appr <- rezz %>%
+      group_by(Approach) %>%
+      filter(!is.na(Abs.Diff)) %>%
+      summarize(Count=length(Abs.Diff), Improve_Count=sum(Abs.Diff < 0), Improve_Pct = Improve_Count/Count,
+                Worsen_Count=sum(Abs.Diff >= 0), Worsen_Pct=Worsen_Count/Count)
+    
+    tabl.plt <- tabl.appr %>%
+      select(Approach, Improve_Pct, Worsen_Pct) %>%
+      pivot_longer(Improve_Pct:Worsen_Pct, names_to=c("Type", ".value"), names_pattern="(.+)_(.+$)") %>%
+      rbind(tabl.appr %>% select(Approach, Count) %>% rename(Pct=Count) %>% mutate(Type="Marginal")) %>%
+      mutate(Type=factor(Type, levels=c("Improve", "Worsen", "Marginal"), ordered=TRUE),
+             color=ifelse(Type != "Marginal", Pct, NaN),
+             text=ifelse(Type != "Marginal", sprintf("%.1f%%", 100*Pct),
+                         sprintf("n=%d", as.integer(Pct)))) %>%
+      ggplot(aes(x=0, y=0, fill=color)) +
+        geom_tile() +
+        scale_fill_gradient(low="#ff0000", high="#00ff00", limits=c(0, 1), na.value="white", name="Percent") +
+        geom_text(aes(label=text)) +
+        facet_grid("Approach ~ Type", switch="y") +
+        theme_bw() +
+        scale_x_continuous(expand = c(0,0), name="") +
+        scale_y_continuous(expand=c(0,0),  name="Approach") +
+        theme(axis.ticks = element_blank(),
+              axis.line = element_blank(),
+              axis.text=element_blank(),
+              panel.spacing = unit(0, "lines"),
+              strip.text.y.left = element_text(angle = 0)) +
+        ggtitle("(E) Percent Improved Magnitude of Batch Effect")
+    g.plt = arrangeGrob(arrangeGrob(conn.plt, ridges.plt, widths=c(.55, .45), nrow=1),
+                arrangeGrob(left.plt + theme(legend.position="None"), 
+                            plt.cmp + theme(legend.position="None"), widths=c(.5, .5), nrow=1),
+                tabl.plt,
+                heights=c(.3, .6, .15))
+  }
+  result$grob <- g.plt
+  return(result)
+}
+```
+
+## Models Leveraged
+
+### Explanation of notation
+
+We will use the convention that:
+
++ $i$ will denote a unique identifier (subject id + retest session id) associated with a subclass;
++ $k$ will denote the treatment group for the item (either part of the reference dataset, $k=1$, or not part of the reference dataset, $k=0$);
++ $j$ will be used to denote the index of the individual in the (subclass, treatment group) pair (if $k=1$ there is only a single individual; if $k = 0$ there may be more depending on the matching strategy employed)
+
+We have the following covariates of interest in our dataset:
+
++ $S_{ikj}$: the sex of the individual $i,j,k$;
++ $A_{ikj}$: the age of the individual $i,j,k$;
++ $C_{ikj}$: the continent on which individual $i,j,k$ was measured.
+
+### Models of Interest
+
++ Unmatched, Marginal: For the indicated dataset, compute the coefficient associated with the desired response, and compute the effect size over the entire dataset (2617 rows). This corresponds to the model:
+\begin{align*}
+  y_{ikj} = \beta_{sex}\mathbb{I} \left\{S_{ijk} = \textrm{"male"}\right\} + \beta_{age}A_{ijk} + \beta_{trt}\mathbb{I}\left\{k = 1\right\} + \beta_0
+\end{align*}
+Inference is performed directly on $\beta_{trt}$. The test employed is the two-sided $t$ test, with $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$.
+
++ Matched, Marginal: Matching is performed, and a dataset with $n < 2617$ rows is produced, containing for each treated item $i'$, $n'_i = 1$ matches associated with treated item $i$ from a second dataset $j$. In this context, $k \in \left\{0, 1\right\}$, for $k=1$ $j=1$, and for $k=0$, $j \in [n_i']$. We fit the same marginal model as before:
+\begin{align*}
+  y_{ikj} = \beta_{sex}\mathbb{I}\left\{S_{ijk} = \textrm{"male"}\right\} + \beta_{age}A_{ijk}  + \beta_{trt}\mathbb{I}\left\{k = 1\right\} + \beta_0
+\end{align*}
+With inference again performed directly on $\beta_{trt}$. The test employed is the two-sided $t$ test, with $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$.
+
++ Matched, Matched: Matching is performed, and a dataset with $n < 2617$ rows is produced, using the same strategy as noted above. In this case, we instead fit a model with global coefficients for sex, age, and an intercept, but for each subclass, we also fit a subclass-specific intercept and slope as well. Let $n_t$ denote the total number of treated individuals (the number of observations in our particular dataset). This corresponds to the model:
+\begin{align*}
+  y_{ikj} = \sum_{i' \in [n_t]}\left(\beta_{trt, i'}\mathbb{I}\left\{k = 1, i = i'\right\} + \beta_{0, i'}\mathbb{I}\left\{i=i'\right\}\right) + \beta_0
+\end{align*}
+Inference is instead performed on:
+\begin{align*}
+  \beta_{trt} = \sum_{i \in [n_t]}w_i \beta_{trt, i'}
+\end{align*}
+Where $w_i$ is a weight vector which sums to $1$. The test employed is the two-sided $t$ test, with $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$. For the purposes of this notebook, $w_i$ is typically taken to be $\frac{1}{n_t}$; that is, $\beta_{trt}$ is an equally-weighted linear combination of the per-treated-individual coefficient estimates.
+
+### Matching Strategies
+
+The matching strategy employed in this notebook is $1: 1$ optimal ratio matching using the `MatchIt` package. Datasets are only compared if they are from the same continent, and multivariate matching is performed on the basis of sex and age.
+
+# Statistics {.tabset}
+
+## Homotopic {.tabset}
+
+The outcomes that concern the homotopic (bilateral) and heterotopic (non-bilateral) connectivity.
+
+### Homotopic Mean {.tabset}
+
+Outcomes correspond to the mean connectivity in the homotopic (bilateral) edges.
+
+#### Raw Data {.tabset}
+
+##### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+res = causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw")
+plot(res$grob)
+```
+
+##### Z-Scored
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", dxfm="Z-Score")$grob)
+```
+
+##### Ranked
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", dxfm="Ranked")$grob)
+```
+
+##### ComBat
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", dxfm="ComBat")$grob)
+```
+
+
+#### Ranked Data {.tabset}
+
+##### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+res <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw")
+plot(res$grob)
+```
+
+##### Z-Scored
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked", dxfm="Z-Score")$grob)
+```
+
+##### Ranked
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked", dxfm="Ranked")$grob)
+```
+
+##### ComBat
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked", dxfm="ComBat")$grob)
+```
+
+
+The outcomes that concern the homotopic connectivity.
+
+### Homotopic Difference {.tabset}
+
+Outcomes correspond to the difference in mean connectivity in the homotopic (bilateral) edges and the heterotopic (non-bilateral).
+
+#### Raw Data {.tabset}
+
+##### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+res <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", measure="Difference")
+plot(res$grob)
+```
+
+##### Z-Scored
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", 
+                dxfm="Z-Score", measure="Difference")$grob)
+```
+
+##### Ranked
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", 
+                dxfm="Ranked", measure="Difference")$grob)
+```
+
+##### ComBat
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw",
+                dxfm="ComBat", measure="Difference")$grob)
+```
+
+
+#### Ranked Data {.tabset}
+
+##### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+res <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", measure="Difference")
+plot(res$grob)
+```
+
+##### Z-Scored
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
+                dxfm="Z-Score", measure="Difference")$grob)
+```
+
+##### Ranked
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
+                dxfm="Ranked", measure="Difference")$grob)
+```
+
+##### ComBat
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
+                dxfm="ComBat", measure="Difference")$grob)
+```
+
+## Homophilic {.tabset}
+
+Communities of interest are the homophilic (same-hemisphere) and heterophilic (different-hemisphere) edges.
+
+### Homophilic Mean {.tabset}
+
+The outcome is the mean homophilic (same-hemisphere) connectivity.
+
+#### Raw Data {.tabset}
+
+##### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+res <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", community="Homophilic")
+plot(res$grob)
+```
+
+##### Z-Scored
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw",
+                dxfm="Z-Score", community="Homophilic")$grob)
+```
+
+##### Ranked
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw",
+                dxfm="Ranked", community="Homophilic")$grob)
+```
+
+##### ComBat
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", 
+                dxfm="ComBat", community="Homophilic")$grob)
+```
+
+
+#### Ranked Data {.tabset}
+
+##### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+res <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw",
+                  community="Homophilic")
+plot(res$grob)
+```
+
+##### Z-Scored
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
+                dxfm="Z-Score", community="Homophilic")$grob)
+```
+
+##### Ranked
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
+                dxfm="Ranked", community="Homophilic")$grob)
+```
+
+##### ComBat
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
+                dxfm="ComBat", community="Homophilic")$grob)
+```
+
+### Homophilic Difference {.tabset}
+
+The outcome is the difference in connectivity between homophilic (same-hemisphere) and heterophilic (different-hemisphere) edges.
+
+#### Raw Data {.tabset}
+
+##### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+res <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw",
+                  community="Homophilic", measure="Difference")
+plot(res$grob)
+```
+
+##### Z-Scored
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw",
+                dxfm="Z-Score", community="Homophilic", measure="Difference")$grob)
+```
+
+##### Ranked
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw",
+                dxfm="Ranked", community="Homophilic", measure="Difference")$grob)
+```
+
+##### ComBat
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", 
+                dxfm="ComBat", community="Homophilic", measure="Difference")$grob)
+```
+
+
+#### Ranked Data {.tabset}
+
+##### No Batch Correction
+
+```{r, fig.height=12, fig.width=8, warning=FALSE, message=FALSE}
+res <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw",
+                  community="Homophilic", measure="Difference")
+plot(res$grob)
+```
+
+##### Z-Scored
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
+                dxfm="Z-Score", community="Homophilic", measure="Difference")$grob)
+```
+
+##### Ranked
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked", 
+                dxfm="Ranked", community="Homophilic", measure="Difference")$grob)
+```
+
+##### ComBat
+
+```{r, fig.height=13, fig.width=8, warning=FALSE, message=FALSE}
+plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
+                dxfm="ComBat", community="Homophilic", measure="Difference")$grob)
+```
