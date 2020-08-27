@@ -41,7 +41,8 @@ raw.stat <- read.csv('../data/summary/batch_statistics.csv') %>%
          Homotopic_Difference=Homotopic_mean - Heterotopic_mean) %>%
   pivot_longer(Homophilic_mean:Homotopic_Difference,
                names_to=c("Community", "Measure"), names_pattern="(.+)_(.+$)") %>%
-  mutate(Dataset=factor(Dataset, levels=sort(unique(Dataset)), ordered=TRUE))
+  mutate(Dataset=factor(Dataset, levels=sort(unique(Dataset)), ordered=TRUE)) %>%
+  filter(!(Dataset %in% c("BNU2", "NYU_2", "UPSM_1")))
 
 raw.gr <- read.csv('../data/summary/proc_graph.csv') %>%
   mutate(Column=factor(Column, levels=1:70, ordered=TRUE), Row=factor(Row, levels=1:70, ordered=TRUE),
@@ -50,12 +51,12 @@ raw.gr <- read.csv('../data/summary/proc_graph.csv') %>%
          Sxfm=factor(Sxfm, levels=c("Raw", "Ranked"), ordered=TRUE),
          Dxfm=factor(Dxfm, levels=c("Raw", "Ranked", "Z-Score", "ComBat"), ordered=TRUE))
 
-continent <- c("IBATRT"="NA", "Uta1"="NA", "IPCAS_2"="AS", "SWU1"="AS", "UWM"="NA", "XHCUMS"="AS", "SWU4"="AS",
+continent <- c("IBATRT"="NA", "Utah1"="NA", "IPCAS_2"="AS", "SWU1"="AS", "UWM"="NA", "XHCUMS"="AS", "SWU4"="AS",
                "BNU2"="AS", "IPCAS_3"="AS", "SWU3"="AS", "IPCAS_4"="AS", "NYU_2"="NA", "IPCAS_1"="AS",
                "IPCAS_7"="AS", "UPSM_1"="NA", "IACAS_1"="AS", "IPCAS_5"="AS", "NYU_1"="NA", "BNU1"="AS",
                "MRN_1"="NA", "BNU3"="AS", "HNU1"="AS", "SWU2"="AS", "IPCAS_8"="AS", "JHNU"="AS", "IPCAS_6"="AS")
 
-raw.stat$Continent <- continent[raw.stat$Dataset]
+raw.stat$Continent <- continent[as.character(raw.stat$Dataset)]
 ```
 
 # Algorithmic Details
@@ -105,52 +106,27 @@ causal_ana <- function(ref.stat,
     ggplot(aes(value, y=Dataset, fill=Dataset)) +
     geom_density_ridges() +
     theme_bw() +
-    ggtitle("(B) Statistic, by-batch") +
+    ggtitle("(B) Statistic, by-site") +
     scale_x_continuous(name=measure) +
     guides(fill=FALSE)
   
   datasets <- as.character(unique(red.stat$Dataset))
   test.res <- do.call(rbind, mclapply(datasets, function(dataseti) {
-     ds.stat <- red.stat %>%
-      mutate(Treatment = ifelse(Dataset == dataseti, 1, 0))
+    ds.stat <- red.stat %>%
+      mutate(Treatment = ifelse(as.character(Dataset) == dataseti, 1, 0))
     n.i <- sum(ds.stat$Treatment)
     dsets.noti <- datasets[datasets != dataseti]
     do.call(rbind, lapply(dsets.noti, function(datasetj) {
       tryCatch({
         dsij.stat <- ds.stat %>%
-          filter(Dataset %in% c(dataseti, datasetj))
+          filter(as.character(Dataset) %in% c(dataseti, datasetj)) %>%
+          ungroup() %>%
+          mutate(Age = Age - mean(Age))
         n.j <- sum(dsij.stat$Treatment == 0)
-        if ((n.i > n.j) || (continent[dataseti] != continent[datasetj])) {
+        if ((n.i > n.j/3) || (continent[dataseti] != continent[datasetj])) {
           return(NULL)
         }
-        
-        # 1:1 optimal ratio matching
-        match_obj <- matchit(Treatment ~ factor(Sex) + Age, data=dsij.stat, method="optimal", ratio=1)
-        matches <- match.data(match_obj)  # ... and fetch the matches themselves
-        
-        unm.mar.mod <- lm(value ~ factor(Treatment), data=dsij.stat)
-        conf.unm.mar <- confint(unm.mar.mod, parm="factor(Treatment)1", level=.95)
-        colnames(conf.unm.mar) <- c("CI.upper", "CI.lower")
-        unm.mar.sum <- summary(unm.mar.mod)$coefficients
-        conf.unm.mar.res <- data.frame(Data="Unmatched", Method="Marginal", Dataset.Ref=dataseti, 
-                                   Dataset.Tgt=datasetj, Estimate=unm.mar.sum["factor(Treatment)1", "Estimate"])
-        
-        unm.adj.mod <- lm(value ~ factor(Treatment) + factor(Sex) + Age, data=dsij.stat)
-        conf.unm.adj <- confint(unm.adj.mod, parm="factor(Treatment)1", level=.95)
-        colnames(conf.unm.adj) <- c("CI.upper", "CI.lower")
-        unm.adj.sum <- summary(unm.adj.mod)$coefficients
-        conf.unm.adj.res <- data.frame(Data="Unmatched", Method="Adjusted", Dataset.Ref=dataseti, 
-                                   Dataset.Tgt=datasetj, Estimate=unm.adj.sum["factor(Treatment)1", "Estimate"])
-        
-        # linear regression model on the matched subgroup, but marginalized
-        mat.mar.mod <- lm(value ~ factor(Treatment), data=matches)
-        conf.mat.mar <- confint(mat.mar.mod, parm="factor(Treatment)1", level=.95)
-        colnames(conf.mat.mar) <- c("CI.upper", "CI.lower")
-        mat.mar.sum <- summary(mat.mar.mod)$coefficients
-        conf.mat.mar.res <- data.frame(Data="Matched", Method="Marginal", Dataset.Ref=dataseti,
-                                  Dataset.Tgt=datasetj, Estimate=mat.mar.sum["factor(Treatment)1", "Estimate"])
-        
-        if (length(unique(matches$Sex)) == 1) {
+        if (length(unique((dsij.stat %>% filter(Treatment == 1))$Sex)) == 1) {
           mat.adj.form <- "value ~ factor(Treatment) + Age"
           # linear regression model with intercept for each subclass, and a slope estimate for the treated variable
           mat.mat.form <- "value ~ factor(subclass) + factor(subclass):factor(Treatment)"
@@ -163,22 +139,57 @@ causal_ana <- function(ref.stat,
           form.ipw.prop <- "Treatment ~ Age + factor(Sex)"
           form.ipw.mod <- "value ~ Treatment + Sex + Age"
         }
-        ipw.dat <- compute_propensities(dsij.stat %>% mutate(Treatment = factor(Treatment), Sex=factor(Sex)), form=form.ipw.prop) %>%
-          mutate(Treatment=factor(Treatment), Sex=factor(Sex))
+        
+        # 1:1 optimal ratio matching
+        match_obj <- matchit(formula(form.ipw.prop), data=dsij.stat,
+                             method="optimal", ratio=3)
+        matches <- match.data(match_obj)  # ... and fetch the matches themselves
+        
+        unm.mar.mod <- lm(value ~ factor(Treatment), data=dsij.stat)
+        conf.unm.mar <- confint(unm.mar.mod, parm="factor(Treatment)1", level=.95)
+        colnames(conf.unm.mar) <- c("CI.upper", "CI.lower")
+        unm.mar.sum <- summary(unm.mar.mod)$coefficients
+        conf.unm.mar.res <- data.frame(Data="Unmatched", Method="Marginal", Dataset.Ref=dataseti, 
+                                   Dataset.Tgt=datasetj, Site=unm.mar.sum["factor(Treatment)1", "Estimate"],
+                                   Signal=unm.mar.sum["(Intercept)", "Estimate"])
+        
+        unm.adj.mod <- lm(mat.adj.form, data=dsij.stat)
+        conf.unm.adj <- confint(unm.adj.mod, parm="factor(Treatment)1", level=.95)
+        colnames(conf.unm.adj) <- c("CI.upper", "CI.lower")
+        unm.adj.sum <- summary(unm.adj.mod)$coefficients
+        conf.unm.adj.res <- data.frame(Data="Unmatched", Method="Adjusted", Dataset.Ref=dataseti, 
+                                   Dataset.Tgt=datasetj, Site=unm.adj.sum["factor(Treatment)1", "Estimate"],
+                                   Signal=unm.mar.sum["(Intercept)", "Estimate"])
+        
+        # linear regression model on the matched subgroup, but marginalized
+        mat.mar.mod <- lm(value ~ factor(Treatment), data=matches)
+        conf.mat.mar <- confint(mat.mar.mod, parm="factor(Treatment)1", level=.95)
+        colnames(conf.mat.mar) <- c("CI.upper", "CI.lower")
+        mat.mar.sum <- summary(mat.mar.mod)$coefficients
+        conf.mat.mar.res <- data.frame(Data="Matched", Method="Marginal", Dataset.Ref=dataseti,
+                                  Dataset.Tgt=datasetj, Site=mat.mar.sum["factor(Treatment)1", "Estimate"],
+                                  Signal=mat.mar.sum["(Intercept)", "Estimate"])
+        
+
+        ipw.dat <- compute_propensities(dsij.stat %>% mutate(Treatment = factor(Treatment),
+                                                             Sex=factor(Sex)), form=form.ipw.prop) %>%
+          mutate(Treatment=factor(Treatment), Sex=factor(Sex), Age=Age-mean(Age))
         ipw.des <- svydesign(ids=~1, weights=ipw.dat$weights, data=ipw.dat, variables=formula(form.ipw.mod))
         ipw.mod <- svyglm(formula=form.ipw.mod, design=ipw.des)
         conf.ipw.adj <- confint(ipw.mod, parm="Treatment1", level=.95)
         colnames(conf.ipw.adj) <- c("CI.upper", "CI.lower")
         ipw.adj.sum <- summary(ipw.mod)$coefficients
         conf.ipw.res <- data.frame(Data="Unmatched", Method="IPW", Dataset.Ref=dataseti,
-                                   Dataset.Tgt=datasetj, Estimate=ipw.adj.sum["Treatment1", "Estimate"])
+                                   Dataset.Tgt=datasetj, Site=ipw.adj.sum["Treatment1", "Estimate"],
+                                   Signal=ipw.adj.sum["(Intercept)", "Estimate"])
         
         mat.adj.mod <- lm(mat.adj.form, data=matches)
         conf.mat.adj <- confint(mat.adj.mod, parm="factor(Treatment)1", level=.95)
         colnames(conf.mat.adj) <- c("CI.upper", "CI.lower")
         mat.adj.sum <- summary(mat.adj.mod)$coefficients
         conf.mat.adj.res <- data.frame(Data="Matched", Method="Adjusted", Dataset.Ref=dataseti,
-                                  Dataset.Tgt=datasetj, Estimate=mat.adj.sum["factor(Treatment)1", "Estimate"])
+                                  Dataset.Tgt=datasetj, Site=mat.adj.sum["factor(Treatment)1", "Estimate"],
+                                  Signal=mat.adj.sum["(Intercept)", "Estimate"])
         
         mat.mat.mod <- lm(mat.mat.form, data=matches)
         # take linear combination of slope coefficients for treatment variable
@@ -189,9 +200,11 @@ causal_ana <- function(ref.stat,
         
         mat.est <- sum(coefeq*mat.mat.mod$coefficients, na.rm=TRUE)
         conf.mat.res <- data.frame(Data="Matched", Method="Matched", Dataset.Ref=dataseti,
-                                   Dataset.Tgt=datasetj, Estimate=mat.est)
+                                   Dataset.Tgt=datasetj, Site=mat.est,
+                                   Signal=mat.mat.mod$coefficients["(Intercept)"])
         return(rbind(conf.unm.mar.res, conf.unm.adj.res, conf.ipw.res, 
-                     conf.mat.mar.res, conf.mat.adj.res, conf.mat.res))
+                     conf.mat.mar.res, conf.mat.adj.res, conf.mat.res) %>%
+                 mutate(Sxfm=sxfm, Dxfm=dxfm))
       }, error=function(e) {return(NULL)})
     }))
   }, mc.cores=detectCores() - 1)) %>%
@@ -208,28 +221,27 @@ causal_ana <- function(ref.stat,
   
   left.plt <- test.res %>%
     ggplot(aes(color=Dataset.Ref, shape=Approach)) +
-      geom_point(aes(x=Estimate, y=yintercept, shape=Approach), size=.9) +
+      geom_point(aes(x=Site, y=yintercept, shape=Approach), size=.9) +
       scale_y_continuous(breaks=1:length(levels(ref.stat$Dataset)),
                          labels=levels(test.res$Dataset.Ref), name="Dataset") +
       geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
-      xlab("Estimated Effect") +
+      xlab("Estimated Site Effect") +
       guides(color=FALSE) +
       theme_bw() +
       ggtitle("(C) Forest Plot")
   
   result = list()
   if (is.null(raw.dat)) {
-    result$raw = test.res
+    result$estimates = test.res
     g.plt = arrangeGrob(arrangeGrob(conn.plt, ridges.plt, widths=c(.55, .45), nrow=1),
                 arrangeGrob(left.plt),
                 heights=c(.3, .7))
-    result$raw <- test.res
   } else {
     rezz <- test.res %>%
-      rename(Estimate.Xfm=Estimate) %>%
-      left_join(raw.dat %>% rename(Estimate.Raw=Estimate) %>% select(Approach, Dataset.Ref, Dataset.Tgt, Estimate.Raw),
+      rename(Site.Xfm=Site) %>%
+      left_join(raw.dat %>% rename(Site.Raw=Site) %>% select(Approach, Dataset.Ref, Dataset.Tgt, Site.Raw),
                 by=c("Dataset.Ref", "Dataset.Tgt", "Approach")) %>%
-      mutate(Abs.Diff=abs(Estimate.Xfm) - abs(Estimate.Raw))
+      mutate(Abs.Diff=abs(Site.Xfm) - abs(Site.Raw))
     
     plt.cmp <- rezz %>%
       ggplot(aes(color=Dataset.Ref, shape=Approach)) +
@@ -276,8 +288,31 @@ causal_ana <- function(ref.stat,
                 tabl.plt,
                 heights=c(.33, .5, .2))
   }
-  result$grob <- g.plt
+  result$estimates <- test.res
+  result$plot <- g.plt
   return(result)
+}
+
+comparison_plt <- function(raw, ...) {
+  do.call(rbind, list(...)) %>%
+    left_join(raw %>% 
+                mutate(Signal.Raw=Signal, Site.Raw=Site) %>%
+                select(Data, Method, Dataset.Ref, Dataset.Tgt,
+                             Site.Raw, Signal.Raw, Sxfm, Approach),
+              by=c("Data", "Method", "Dataset.Ref", "Dataset.Tgt", "Sxfm",
+                   "Approach")) %>%
+    group_by(Approach, Dxfm) %>%
+    #mutate(Signal=Signal/(max(c(Signal, Signal.Raw)) - min(c(Signal, Signal.Raw))),
+    #       Site=Site/(max(c(Site, Site.Raw)) - min(c(Site, Site.Raw))),
+    #      Signal.Raw=Signal.Raw/(max(c(Signal, Signal.Raw)) - min(c(Signal, Signal.Raw))),
+    #       Site.Raw=Site.Raw/(max(c(Site, Site.Raw)) - min(c(Site, Site.Raw)))) %>%
+    ggplot(aes(x=Signal.Raw, y=abs(Site.Raw), xend=Signal, yend=abs(Site), color=Dataset.Ref)) +
+      geom_segment(arrow=arrow(length=unit(.1, "cm")), size=.2) +
+      facet_grid("Dxfm ~ Approach", scales="free_y") +
+      xlab("Signal Estimate") +
+      ylab("|Site Effect Estimate|") +
+      theme_bw() +
+      ggtitle("Change in Estimated Effects")
 }
 ```
 
@@ -337,57 +372,77 @@ Outcomes correspond to the mean connectivity in the homotopic (bilateral) edges.
 
 #### Raw Data {.tabset}
 
-##### No Batch Correction
+```{r, fig.height=4, fig.width=10}
+raw <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", pos.scale=.6)
+zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Z-Score",
+                  pos.scale = .6)
+ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Ranked",
+                     pos.scale = .6)
+combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="ComBat",
+                    pos.scale=.6)
+comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
+```
+
+##### No Site Correction
 
 ```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
-res = causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw")
-plot(res$grob)
+plot(raw$plot)
 ```
 
 ##### Z-Scored
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", dxfm="Z-Score", pos.scale = .6)$grob)
+plot(zsc$plot)
 ```
 
 ##### Ranked
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", dxfm="Ranked")$grob)
+plot(ranked$plot)
 ```
 
 ##### ComBat
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", dxfm="ComBat")$grob)
+plot(combt$plot)
 ```
 
 
 #### Ranked Data {.tabset}
 
-##### No Batch Correction
+```{r, fig.height=4, fig.width=10}
+raw <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", pos.scale=.6)
+zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Z-Score",
+                  pos.scale = .6)
+ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Ranked",
+                     pos.scale = .6)
+combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="ComBat",
+                    pos.scale=.6)
+comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
+```
+
+##### No Site Correction
 
 ```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
-res <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw")
-plot(res$grob)
+plot(raw$plot)
 ```
 
 ##### Z-Scored
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked", dxfm="Z-Score")$grob)
+plot(zsc$plot)
 ```
 
 ##### Ranked
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked", dxfm="Ranked")$grob)
+plot(ranked$plot)
 ```
 
 ##### ComBat
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked", dxfm="ComBat")$grob)
+plot(combt$plot)
 ```
 
 
@@ -399,63 +454,80 @@ Outcomes correspond to the difference in mean connectivity in the homotopic (bil
 
 #### Raw Data {.tabset}
 
-##### No Batch Correction
+```{r, fig.height=4, fig.width=10}
+raw <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", measure="Difference",
+                  pos.scale=.6)
+zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Z-Score",
+                  pos.scale = .6, measure="Difference")
+ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Ranked",
+                     pos.scale = .6, measure="Difference")
+combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="ComBat", 
+                    pos.scale=.6, measure="Difference")
+comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
+```
+
+
+##### No Site Correction
 
 ```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
-res <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", measure="Difference")
-plot(res$grob)
+plot(raw$plot)
 ```
 
 ##### Z-Scored
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", 
-                dxfm="Z-Score", measure="Difference")$grob)
+plot(zsc$plot)
 ```
 
 ##### Ranked
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", 
-                dxfm="Ranked", measure="Difference")$grob)
+plot(ranked$plot)
 ```
 
 ##### ComBat
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw",
-                dxfm="ComBat", measure="Difference")$grob)
+plot(combt$plot)
 ```
 
 
 #### Ranked Data {.tabset}
 
-##### No Batch Correction
+```{r, fig.height=4, fig.width=10}
+raw <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", measure="Difference",
+                  pos.scale=.6)
+zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Z-Score",
+                  pos.scale = .6, measure="Difference")
+ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Ranked",
+                     pos.scale = .6, measure="Difference")
+combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="ComBat", 
+                    pos.scale=.6, measure="Difference")
+comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
+```
+
+##### No Site Correction
 
 ```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
-res <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", measure="Difference")
-plot(res$grob)
+plot(raw$plot)
 ```
 
 ##### Z-Scored
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
-                dxfm="Z-Score", measure="Difference")$grob)
+plot(zsc$plot)
 ```
 
 ##### Ranked
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
-                dxfm="Ranked", measure="Difference")$grob)
+plot(ranked$plot)
 ```
 
 ##### ComBat
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
-                dxfm="ComBat", measure="Difference")$grob)
+plot(combt$plot)
 ```
 
 ## Homophilic {.tabset}
@@ -468,64 +540,79 @@ The outcome is the mean homophilic (same-hemisphere) connectivity.
 
 #### Raw Data {.tabset}
 
-##### No Batch Correction
+```{r, fig.height=4, fig.width=10}
+raw <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", measure="mean",
+                  pos.scale=.6, community="Homophilic")
+zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Z-Score",
+                  pos.scale = .6, measure="mean", community="Homophilic")
+ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Ranked",
+                     pos.scale = .6, measure="mean", community="Homophilic")
+combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="ComBat", 
+                    pos.scale=.6, measure="mean", community="Homophilic")
+comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
+```
+
+##### No Site Correction
 
 ```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
-res <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", community="Homophilic")
-plot(res$grob)
+plot(raw$plot)
 ```
 
 ##### Z-Scored
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw",
-                dxfm="Z-Score", community="Homophilic")$grob)
+plot(zsc$plot)
 ```
 
 ##### Ranked
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw",
-                dxfm="Ranked", community="Homophilic")$grob)
+plot(ranked$plot)
 ```
 
 ##### ComBat
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", 
-                dxfm="ComBat", community="Homophilic")$grob)
+plot(combt$plot)
 ```
 
 
 #### Ranked Data {.tabset}
 
-##### No Batch Correction
+```{r, fig.height=4, fig.width=10}
+raw <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", measure="mean",
+                  pos.scale=.6, community="Homophilic")
+zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Z-Score",
+                  pos.scale = .6, measure="mean", community="Homophilic")
+ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Ranked",
+                     pos.scale = .6, measure="mean", community="Homophilic")
+combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="ComBat", 
+                    pos.scale=.6, measure="mean", community="Homophilic")
+comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
+```
+
+##### No Site Correction
 
 ```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
-res <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw",
-                  community="Homophilic")
-plot(res$grob)
+plot(raw$plot)
 ```
 
 ##### Z-Scored
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
-                dxfm="Z-Score", community="Homophilic")$grob)
+plot(zsc$plot)
 ```
 
 ##### Ranked
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
-                dxfm="Ranked", community="Homophilic")$grob)
+plot(ranked$plot)
 ```
 
 ##### ComBat
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
-                dxfm="ComBat", community="Homophilic")$grob)
+plot(combt$plot)
 ```
 
 ### Homophilic Difference {.tabset}
@@ -534,63 +621,77 @@ The outcome is the difference in connectivity between homophilic (same-hemispher
 
 #### Raw Data {.tabset}
 
-##### No Batch Correction
+```{r, fig.height=4, fig.width=10}
+raw <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", measure="Difference",
+                  pos.scale=.6, community="Homophilic")
+zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Z-Score",
+                  pos.scale = .6, measure="Difference", community="Homophilic")
+ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Ranked",
+                     pos.scale = .6, measure="Difference", community="Homophilic")
+combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="ComBat", 
+                    pos.scale=.6, measure="Difference", community="Homophilic")
+comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
+```
+
+##### No Site Correction
 
 ```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
-res <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw",
-                  community="Homophilic", measure="Difference")
-plot(res$grob)
+plot(raw$plot)
 ```
 
 ##### Z-Scored
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw",
-                dxfm="Z-Score", community="Homophilic", measure="Difference")$grob)
+plot(zsc$plot)
 ```
 
 ##### Ranked
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw",
-                dxfm="Ranked", community="Homophilic", measure="Difference")$grob)
+plot(ranked$plot)
 ```
 
 ##### ComBat
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Raw", 
-                dxfm="ComBat", community="Homophilic", measure="Difference")$grob)
+plot(combt$plot)
 ```
 
 
 #### Ranked Data {.tabset}
 
-##### No Batch Correction
+```{r, fig.height=4, fig.width=10}
+raw <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", measure="Difference",
+                  pos.scale=.6, community="Homophilic")
+zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Z-Score",
+                  pos.scale = .6, measure="Difference", community="Homophilic")
+ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Ranked",
+                     pos.scale = .6, measure="Difference", community="Homophilic")
+combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="ComBat", 
+                    pos.scale=.6, measure="Difference", community="Homophilic")
+comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
+```
+
+##### No Site Correction
 
 ```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
-res <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw",
-                  community="Homophilic", measure="Difference")
-plot(res$grob)
+plot(raw$plot)
 ```
 
 ##### Z-Scored
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
-                dxfm="Z-Score", community="Homophilic", measure="Difference")$grob)
+plot(zsc$plot)
 ```
 
 ##### Ranked
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked", 
-                dxfm="Ranked", community="Homophilic", measure="Difference")$grob)
+plot(ranked$plot)
 ```
 
 ##### ComBat
 
 ```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
-plot(causal_ana(raw.stat, raw.gr, raw.dat=res$raw, sxfm="Ranked",
-                dxfm="ComBat", community="Homophilic", measure="Difference")$grob)
+plot(combt$plot)
 ```
