@@ -150,7 +150,7 @@ plot(single.opt %>%
 
 Further, we compute an estimate of the overlapping index. With the first probability distribution $f_A$ and the second probability distribution $f_B$:
 \begin{align*}
-  \eta(A, B) &= \integral{\realn}{}{\min(f_A(x), f_B(x))}{x}
+  \eta(A, B) &= \int_{\mathbb R}{}{\min(f_A(x), f_B(x))}{\textrm{d}x}
 \end{align*}
 
 ```{r}
@@ -268,7 +268,7 @@ causal_ana <- function(ref.stat,
                         alpha=.7, point_size=1,
                         position=position_points_jitter(width=.02, height=0)) +
     theme_bw() +
-    ggtitle("(B) Statistic, by-Continent") +
+    ggtitle("(B) Statistic, by-Site") +
     scale_x_continuous(name=measure) +
     guides(fill=FALSE)
   
@@ -531,15 +531,19 @@ causal_ana <- function(ref.stat,
   tab.invalid <- test.res %>%
     group_by(Approach) %>%
     summarize(Count_Signal=sum(pvalue.signal < alpha),
-              Count_Site=sum(pvalue.site >= alpha),
-              Count_Signal.Site=sum(pvalue.signal < alpha & pvalue.site >= alpha),
+              Count_Site=sum(pvalue.site < alpha),
+              Count_NoSite=sum(pvalue.site >= alpha),
+              Count_Signal.NoSite=sum(pvalue.signal < alpha & pvalue.site >= alpha),
+              Count_Signal.Site=sum(pvalue.signal < alpha & pvalue.site < alpha),
               Count_Invalid=sum(Overlap <= ov.thresh),
               Count=n()) %>%
     pivot_longer(Count_Signal:Count_Invalid, names_prefix="Count_", names_to="Type",
                  values_to="Type.Count") %>%
     mutate(Fraction=Type.Count/Count, Text=sprintf("%d/%d", Type.Count, Count),
-           Type=recode_factor(Type, "Signal.Site"="Signal + No Site", "Site"="No Site"),
-           Type=factor(Type, levels=c("Signal", "No Site", "Signal + No Site", "Invalid"), ordered=TRUE)) %>%
+           Type=recode_factor(Type, "Signal.Site"="Signal + Site", 
+                              "Signal.NoSite"="Signal + No Site", "NoSite"="No Site"),
+           Type=factor(Type, levels=c("Signal", "No Site", "Site", "Signal + Site",
+                                      "Signal + No Site", "Invalid"), ordered=TRUE)) %>%
     ungroup() %>%
     ggplot(aes(x=0, y=0, fill=Fraction)) +
         geom_tile() +
@@ -575,9 +579,9 @@ causal_ana <- function(ref.stat,
     pivot_longer(Count_Unmatched.Only:Count_Neither, names_prefix="Count_", names_to="Type",
                  values_to="Type.Count") %>%
     mutate(Fraction=Type.Count/Count, Text=sprintf("%d/%d", Type.Count, Count),
-           Type=recode_factor(Type, "Unmatched.Only"="Only Unmatched",
-                              "Matched.Only"="Only Matched"),
-           Type=factor(Type, levels=c("Only Unmatched", "Only Matched", "Both", "Neither"), 
+           Type=recode_factor(Type, "Unmatched.Only"="Only Ignoring",
+                              "Matched.Only"="Only Accounting"),
+           Type=factor(Type, levels=c("Only Ignoring", "Only Accounting", "Both", "Neither"), 
                        ordered=TRUE)) %>%
     ungroup() %>%
     ggplot(aes(x=Type, y=0, fill=Fraction)) +
@@ -648,15 +652,16 @@ causal_ana <- function(ref.stat,
       summarize(Count=n(), Count_Improve.Site=sum(Abs.Diff < 0),
                 Count_Improve.Signal=sum(Sig.Diff > 0),
                 Count_Improve.Site.Improve.Signal=sum(Abs.Diff < 0 & Sig.Diff > 0),
+                Count_Sig.Signal=sum(pvalue.signal < alpha),
                 Count_Improve.Site.Signal=sum(Abs.Diff < 0 & pvalue.signal < alpha)) %>%
       pivot_longer(Count_Improve.Site:Count_Improve.Site.Signal, names_prefix="Count_", names_to="Type",
                  values_to="Type.Count") %>%
       mutate(Fraction=Type.Count/Count, Text=sprintf("%d/%d", Type.Count, Count),
               Type=recode_factor(Type, "Improve.Site.Signal"="Improve Site + Sig. Signal", 
-                              "Improve.Site"="Improve Site",
+                              "Improve.Site"="Improve Site", "Sig.Signal"="Sig. Signal",
                               "Improve.Signal"="Improve Signal",
                               "Improve.Site.Improve.Signal"="Improve Site + Signal"),
-            Type=factor(Type, levels=c("Improve Site", "Improve Signal",
+            Type=factor(Type, levels=c("Improve Site", "Improve Signal", "Sig. Signal",
                                       "Improve Site + Sig. Signal", "Improve Site + Signal"),
                        ordered=TRUE)) %>%
       ungroup() %>%
@@ -673,7 +678,8 @@ causal_ana <- function(ref.stat,
                 axis.line = element_blank(),
                 axis.text=element_blank(),
                 panel.spacing = unit(0, "lines"),
-                strip.text.y.left = element_text(angle = 0))
+                strip.text.y.left = element_text(angle = 0)) +
+      ggtitle("(I) How do Effects Change after Transforming?")
     
     g.plt = arrangeGrob(arrangeGrob(conn.plt, ridges.plt, ridges.plt.cont, 
                                     widths=c(.55, .45, .45), nrow=1),
@@ -799,7 +805,7 @@ comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 
 ##### No Site Correction
 
-```{r, fig.height=16, fig.width=11, warning=FALSE}
+```{r, fig.height=17.5, fig.width=12, warning=FALSE}
 plot(raw$plot)
 ```
 
@@ -837,7 +843,7 @@ comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 
 ##### No Site Correction
 
-```{r, fig.height=16, fig.width=11, warning=FALSE}
+```{r, fig.height=17.5, fig.width=12, warning=FALSE}
 plot(raw$plot)
 ```
 
@@ -883,7 +889,7 @@ comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 
 ##### No Site Correction
 
-```{r, fig.height=16, fig.width=11, warning=FALSE}
+```{r, fig.height=17.5, fig.width=12, warning=FALSE}
 plot(raw$plot)
 ```
 
@@ -922,7 +928,7 @@ comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 
 ##### No Site Correction
 
-```{r, fig.height=16, fig.width=11, warning=FALSE}
+```{r, fig.height=17.5, fig.width=12, warning=FALSE}
 plot(raw$plot)
 ```
 
@@ -968,7 +974,7 @@ comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 
 ##### No Site Correction
 
-```{r, fig.height=16, fig.width=11, warning=FALSE}
+```{r, fig.height=17.5, fig.width=12, warning=FALSE}
 plot(raw$plot)
 ```
 
@@ -1007,7 +1013,7 @@ comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 
 ##### No Site Correction
 
-```{r, fig.height=16, fig.width=11, warning=FALSE}
+```{r, fig.height=17.5, fig.width=12, warning=FALSE}
 plot(raw$plot)
 ```
 
@@ -1049,7 +1055,7 @@ comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 
 ##### No Site Correction
 
-```{r, fig.height=16, fig.width=11, warning=FALSE}
+```{r, fig.height=17.5, fig.width=12, warning=FALSE}
 plot(raw$plot)
 ```
 
@@ -1088,7 +1094,7 @@ comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 
 ##### No Site Correction
 
-```{r, fig.height=16, fig.width=11, warning=FALSE}
+```{r, fig.height=17.5, fig.width=12, warning=FALSE}
 plot(raw$plot)
 ```
 
