@@ -11,10 +11,10 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
 ```
 
-```{r, message=FALSE}
+```{r}
 require(tidyverse)
 require(grid)
 require(MatchIt)
@@ -24,6 +24,7 @@ require(multcomp)
 require(gridExtra)
 require(parallel)
 require(survey)
+require(energy)
 select <- dplyr::select; mutate <- dplyr::mutate; arrange=dplyr::arrange
 ```
 
@@ -40,9 +41,7 @@ raw.stat <- read.csv('../data/summary/batch_statistics.csv') %>%
   mutate(Homophilic_Difference=Homophilic_mean - Heterophilic_mean, 
          Homotopic_Difference=Homotopic_mean - Heterotopic_mean) %>%
   pivot_longer(Homophilic_mean:Homotopic_Difference,
-               names_to=c("Community", "Measure"), names_pattern="(.+)_(.+$)") %>%
-  mutate(Dataset=factor(Dataset, levels=sort(unique(Dataset)), ordered=TRUE)) %>%
-  filter(!(Dataset %in% c("BNU2", "NYU_2", "UPSM_1")))
+               names_to=c("Community", "Measure"), names_pattern="(.+)_(.+$)")
 
 raw.gr <- read.csv('../data/summary/proc_graph.csv') %>%
   mutate(Column=factor(Column, levels=1:70, ordered=TRUE), Row=factor(Row, levels=1:70, ordered=TRUE),
@@ -53,16 +52,176 @@ raw.gr <- read.csv('../data/summary/proc_graph.csv') %>%
 
 continent <- c("IBATRT"="NA", "Utah1"="NA", "IPCAS_2"="AS", "SWU1"="AS", "UWM"="NA", "XHCUMS"="AS", "SWU4"="AS",
                "BNU2"="AS", "IPCAS_3"="AS", "SWU3"="AS", "IPCAS_4"="AS", "NYU_2"="NA", "IPCAS_1"="AS",
-               "IPCAS_7"="AS", "UPSM_1"="NA", "IACAS_1"="AS", "IPCAS_5"="AS", "NYU_1"="NA", "BNU1"="AS",
-               "MRN_1"="NA", "BNU3"="AS", "HNU1"="AS", "SWU2"="AS", "IPCAS_8"="AS", "JHNU"="AS", "IPCAS_6"="AS")
+               "IPCAS_7"="AS", "UPSM_1"="NA", "IACAS_1"="AS", "IPCAS_5"="AS", "NYU_1"="NA", "NYU_2"="NA", "BNU1"="AS",
+               "MRN_1"="NA", "BNU3"="AS", "HNU1"="AS", "SWU2"="AS", "IPCAS_8"="AS", "JHNU"="AS", "IPCAS_6"="AS",
+               "BMB_1"="EU")
 
-raw.stat$Continent <- continent[as.character(raw.stat$Dataset)]
+raw.stat$Continent <- as.character(continent[as.character(raw.stat$Dataset)])
+
+raw.stat <- raw.stat %>%
+  arrange(Continent, Dataset) %>%
+  mutate(Dataset=factor(Dataset, levels=unique(Dataset), ordered=TRUE))
+
+avg.wts <- read.csv('../data/summary/avg_gr_weights.csv') %>%
+  mutate(Sxfm=recode_factor(Sxfm, "raw"="Raw", "ptr"="Ranked"), 
+         Dxfm=recode_factor(Dxfm, "raw"="Raw", "ptr"="Ranked", "zscore"="Z-Score", "combat"="ComBat"),
+         Sxfm=factor(Sxfm, levels=c("Raw", "Ranked"), ordered=TRUE), 
+         Dxfm=factor(Dxfm, levels=c("Raw", "Ranked", "Z-Score", "ComBat"), ordered=TRUE),
+         Dataset1=factor(Dataset1, levels=levels(raw.stat$Dataset), ordered=TRUE),
+         Dataset2=factor(Dataset2, levels=levels(raw.stat$Dataset), ordered=TRUE))
+```
+
+## Dataset Metadata
+
+### By Dataset
+
+Below, we visualize how the different datasets overlap in terms of the distributions of metadata. This metadata (Sex, Age, and Continent), will be used later on for propensity weighting and matching, so understanding how the different datasets display similarities/differences in the observed metadata is critical to understanding the reasonability of conclusions we are able to derive. Below, we observe the fraction of individuals who are male/female, and a density estimate of the marginal age distributions, for each dataset. 
+
+```{r}
+single.opt <- raw.stat %>%
+  filter(Sxfm=="Raw" & Dxfm == "Raw" & Measure=="mean" & Community == "Homotopic")
+
+single.opt %>%
+  group_by(Dataset) %>%
+  summarize(NSubjects = length(unique(Subject)), NScans=n())
+```
+
+```{r, fig.height=9, fig.width=9}
+plot(single.opt %>%
+  ggplot(aes(y=Dataset, x=Age, group=Dataset, fill=Dataset)) +
+    geom_density_ridges(color="black", jittered_points=TRUE, point_shape="|",
+                        alpha=.7, point_size=1,
+                        position=position_points_jitter(width=.02, height=0)) +
+    theme_bw() +
+    ggtitle("Age Distribution") +
+    guides(color=FALSE))
+```
+
+```{r, fig.height=3, fig.width=20}
+plot(single.opt %>%
+  group_by(Dataset, Sex) %>%
+  summarize(Fraction=n()) %>%
+  group_by(Dataset) %>%
+  mutate(Fraction=Fraction/sum(Fraction)) %>%
+  ggplot(aes(x=Dataset, y=factor(Sex), fill=Fraction, group=Dataset)) +
+    geom_tile() +
+    geom_text(aes(label=sprintf("%.3f", Fraction))) +
+    scale_y_discrete(breaks=c(1,2), labels=c("Male", "Female"), name="Sex") +
+    theme_bw() +
+    scale_fill_gradient(low="white", high="#33007b", limits=c(0, 1)) +
+    ggtitle("Sex Distribution") +
+    guides(color=FALSE))
+```
+
+### By Continent
+
+```{r}
+print(single.opt %>%
+  group_by(Continent) %>%
+  summarize(NSubjects = length(unique(Subject)), NScans=n(), NDatasets=length(unique(Dataset))))
+
+plot(single.opt %>%
+  ggplot(aes(y=Continent, x=Age, group=Continent, fill=Continent)) +
+    geom_density_ridges(color="black", jittered_points=TRUE, point_shape="|",
+                        alpha=.7, point_size=1,
+                        position=position_points_jitter(width=.02, height=0)) +
+    theme_bw() +
+    ggtitle("Age Distribution") +
+    guides(color=FALSE))
+```
+
+```{r, fig.height=3, fig.width=8}
+plot(single.opt %>%
+  group_by(Continent, Sex) %>%
+  summarize(Fraction=n()) %>%
+  group_by(Continent) %>%
+  mutate(Fraction=Fraction/sum(Fraction)) %>%
+  ggplot(aes(x=Continent, y=factor(Sex), fill=Fraction, group=Continent)) +
+    geom_tile() +
+    geom_text(aes(label=sprintf("%.3f", Fraction))) +
+    scale_y_discrete(breaks=c(1,2), labels=c("Male", "Female"), name="Sex") +
+    theme_bw() +
+    scale_fill_gradient(low="white", high="#33007b", limits=c(0, 1)) +
+    ggtitle("Sex Distribution") +
+    guides(color=FALSE))
+```
+
+### Overlap Fractions
+
+Further, we compute an estimate of the overlapping index. With the first probability distribution $f_A$ and the second probability distribution $f_B$:
+\begin{align*}
+  \eta(A, B) &= \integral{\realn}{}{\min(f_A(x), f_B(x))}{x}
+\end{align*}
+
+```{r}
+overlap_dist <- function(X) {
+  datasets = levels(X$Dataset)
+  D=sapply(unique(levels(X$Dataset)), function(dataseti) {
+    sapply(unique(levels(X$Dataset)), function(datasetj) {
+      suppressMessages(
+        compute_overlap(X %>% filter(Dataset == dataseti) %>% ungroup(), 
+                        X %>% filter(Dataset == datasetj) %>% ungroup()))
+    })
+  })
+  colnames(D) <- rownames(D) <- levels(X$Dataset)
+  data.frame(Dataset1=colnames(D)[col(D)], Dataset2=rownames(D)[row(D)],
+             Overlap=c(D)) %>%
+    mutate(Dataset1=factor(Dataset1, levels=levels(X$Dataset), ordered=TRUE),
+           Dataset2=factor(Dataset2, levels=levels(X$Dataset), ordered=TRUE)) %>%
+    arrange(Dataset1, Dataset2)
+}
+
+compute_overlap <- function(X1, X2) {
+  # probability of drawing two individuals with the same sex
+  X1.sex <- X1 %>%
+     group_by(Sex) %>%
+     summarize(Per=n(), .groups="keep") %>%
+     ungroup() %>%
+     mutate(Per=Per/sum(Per))
+  X2.sex <- X2 %>%
+     group_by(Sex) %>%
+     summarize(Per=n(), .groups="keep") %>%
+     ungroup() %>%
+     mutate(Per=Per/sum(Per))
+  range.age <- c(min(X1$Age, X2$Age), max(X1$Age, X2$Age))
+  per.ov <- sum(sapply(1:2, function(sex) {
+    tryCatch({
+    ov.sex <- pmin((X1.sex %>% filter(Sex == sex))$Per, (X2.sex %>% filter(Sex == sex))$Per)
+    X1.sex.age <- (X1 %>% filter(Sex == sex) %>% select(Age))$Age
+    X2.sex.age <- (X2 %>% filter(Sex == sex) %>% select(Age))$Age
+    # obtain pdf for age
+    X1.dens <- density(as.numeric(X1.sex.age), from=min(range.age), to=max(range.age))
+    X1.dens$y <- X1.dens$y/sum(X1.dens$y)
+    X2.dens <- density(as.numeric(X2.sex.age), from=min(range.age), to=max(range.age))
+    X2.dens$y <- X2.dens$y/sum(X2.dens$y)
+    ov.sex.age <- sum(pmin(X1.dens$y, X2.dens$y))
+    return(ov.sex*ov.sex.age)
+    }, error=function(e) {return(0)})
+  }))
+  return(as.numeric(unique((X1$Continent)) == unique(X2$Continent))*per.ov)
+}
+
+overlap.D=single.opt %>%
+  group_by(Dataset) %>%
+  select(Dataset, Continent, Sex, Age) %>%
+  {do.call(overlap_dist, list(X=(.)))}
+```
+
+```{r, fig.height=5, fig.width=6}
+overlap.D %>%
+  ggplot(aes(x=Dataset1, y=Dataset2, fill=Overlap)) +
+    geom_tile() +
+    theme_bw() +
+    scale_fill_gradient(low="white", high="#33007b", limits=c(0, 1)) +
+    ggtitle("Estimate of Overlap of Empirical Distributions") +
+    guides(color=FALSE) +
+    theme(axis.text.x=element_text(angle=90))
 ```
 
 # Algorithmic Details
 
 ```{r}
-compute_propensities <- function(df, form="Treatment ~ Sex + Age", trim=FALSE) {
+compute_propensities <- function(df, form="Treatment ~ Sex + Age", trim=.01) {
   df$prop_scores <- glm(form, family=binomial(link="logit"), data=df)$fitted.values
   df <- df %>%
     mutate(weights=ifelse(Treatment == 1, 1, prop_scores/(1 - prop_scores))) %>%
@@ -71,7 +230,7 @@ compute_propensities <- function(df, form="Treatment ~ Sex + Age", trim=FALSE) {
     ungroup()
   if (!isFALSE(trim)) {
     df <- df %>%
-      filter(weights >= trim)
+      filter(prop_scores >= trim)
   }
   return(df)
 }
@@ -84,7 +243,8 @@ causal_ana <- function(ref.stat,
                        community="Homotopic", 
                        measure="mean", 
                        pos.scale=.5,
-                       alpha=.05) {
+                       alpha=.05,
+                       ov.thresh=.2) {
   # subset the data on the transforms of interest at the subject and dataset level
   red.stat <- ref.stat %>%
     filter(Sxfm == sxfm & Dxfm == dxfm & Community == community & Measure == measure)
@@ -104,11 +264,23 @@ causal_ana <- function(ref.stat,
   # plot of statistic magnitudes, per-dataset
   ridges.plt <- red.stat %>%
     ggplot(aes(value, y=Dataset, fill=Dataset)) +
-    geom_density_ridges() +
+    geom_density_ridges(color="black", jittered_points=TRUE, point_shape="|",
+                        alpha=.7, point_size=1,
+                        position=position_points_jitter(width=.02, height=0)) +
     theme_bw() +
-    ggtitle("(B) Statistic, by-site") +
+    ggtitle("(B) Statistic, by-Continent") +
     scale_x_continuous(name=measure) +
     guides(fill=FALSE)
+  
+  ridges.plt.cont <- red.stat %>%
+      ggplot(aes(value, y=Continent, fill=Continent)) +
+      geom_density_ridges(color="black", jittered_points=TRUE, point_shape="|",
+                          alpha=.7, point_size=2,
+                          position=position_points_jitter(width=.02, height=0)) +
+      theme_bw() +
+      ggtitle("(B) Statistic, by-Continent") +
+      scale_x_continuous(name=measure) +
+      guides(fill=FALSE)
   
   datasets <- as.character(unique(red.stat$Dataset))
   test.res <- do.call(rbind, mclapply(datasets, function(dataseti) {
@@ -117,6 +289,13 @@ causal_ana <- function(ref.stat,
     n.i <- sum(ds.stat$Treatment)
     dsets.noti <- datasets[datasets != dataseti]
     do.call(rbind, lapply(dsets.noti, function(datasetj) {
+      if (measure == "mean") {
+        signal.cmp <- as.numeric((avg.wts %>%
+          filter(Sxfm == sxfm & Dxfm == dxfm & 
+                   Dataset1 == dataseti & Dataset2 == datasetj))$Average)
+      } else {
+        signal.cmp <- 0
+      }
       tryCatch({
         dsij.stat <- ds.stat %>%
           filter(as.character(Dataset) %in% c(dataseti, datasetj)) %>%
@@ -124,8 +303,16 @@ causal_ana <- function(ref.stat,
           mutate(Age = Age - mean(Age))
         n.j <- sum(dsij.stat$Treatment == 0)
         if ((n.i > n.j/3) || (continent[dataseti] != continent[datasetj])) {
-          return(NULL)
+          match <- FALSE
+          if (continent[dataseti] != continent[datasetj]) {
+            ipw <- FALSE
+          } else {
+            ipw <- TRUE
+          }
+        } else {
+          match <- TRUE; ipw <- TRUE
         }
+        result <- list()
         if (length(unique((dsij.stat %>% filter(Treatment == 1))$Sex)) == 1) {
           mat.adj.form <- "value ~ factor(Treatment) + Age"
           # linear regression model with intercept for each subclass, and a slope estimate for the treated variable
@@ -140,77 +327,165 @@ causal_ana <- function(ref.stat,
           form.ipw.mod <- "value ~ Treatment + Sex + Age"
         }
         
-        # 1:1 optimal ratio matching
-        match_obj <- matchit(formula(form.ipw.prop), data=dsij.stat,
-                             method="optimal", ratio=3)
-        matches <- match.data(match_obj)  # ... and fetch the matches themselves
-        
+        ## Unmatched; Unadjusted
         unm.mar.mod <- lm(value ~ factor(Treatment), data=dsij.stat)
         conf.unm.mar <- confint(unm.mar.mod, parm="factor(Treatment)1", level=.95)
         colnames(conf.unm.mar) <- c("CI.upper", "CI.lower")
-        unm.mar.sum <- summary(unm.mar.mod)$coefficients
-        conf.unm.mar.res <- data.frame(Data="Unmatched", Method="Marginal", Dataset.Ref=dataseti, 
-                                   Dataset.Tgt=datasetj, Site=unm.mar.sum["factor(Treatment)1", "Estimate"],
-                                   Signal=unm.mar.sum["(Intercept)", "Estimate"])
+        unm.mar.sum <- summary(unm.mar.mod)
+        coefeq.sig <- matrix(0, nrow=1, ncol=length(unm.mar.mod$coefficients))
+        colnames(coefeq.sig) <- names(unm.mar.mod$coefficients)
+        coefeq.sig[1,"(Intercept)"] <- 1
+        coefeq.sig <- coefeq.sig/sum(coefeq.sig)
+        mat.test.sig <- summary(glht(unm.mar.mod, coefeq.sig, alternative="greater", rhs=signal.cmp))
+        sig.est <- as.numeric(mat.test.sig$test$coefficients)
+        pvalue.signal <- as.numeric(mat.test.sig$test$pvalues)
+        result$unm.mar <- data.frame(Data="Unmatched", Method="Unadjusted", Dataset.Ref=dataseti, 
+                                   Dataset.Tgt=datasetj,
+                                   Site=unm.mar.sum$coefficients["factor(Treatment)1", "Estimate"],
+                                   Signal=sig.est - signal.cmp, 
+                                   pvalue.site=unm.mar.sum$coefficients["factor(Treatment)1", "Pr(>|t|)"],
+                                   pvalue.signal=pvalue.signal)
         
+        ## Unmatched; Adjusted
         unm.adj.mod <- lm(mat.adj.form, data=dsij.stat)
         conf.unm.adj <- confint(unm.adj.mod, parm="factor(Treatment)1", level=.95)
         colnames(conf.unm.adj) <- c("CI.upper", "CI.lower")
-        unm.adj.sum <- summary(unm.adj.mod)$coefficients
-        conf.unm.adj.res <- data.frame(Data="Unmatched", Method="Adjusted", Dataset.Ref=dataseti, 
-                                   Dataset.Tgt=datasetj, Site=unm.adj.sum["factor(Treatment)1", "Estimate"],
-                                   Signal=unm.mar.sum["(Intercept)", "Estimate"])
+        unm.adj.sum <- summary(unm.adj.mod)
+        coefeq.sig <- matrix(0, nrow=1, ncol=length(unm.adj.mod$coefficients))
+        colnames(coefeq.sig) <- names(unm.adj.mod$coefficients)
+        coefeq.sig[1,"(Intercept)"] <- 1
+        coefeq.sig <- coefeq.sig/sum(coefeq.sig)
+        mat.test.sig <- summary(glht(unm.adj.mod, coefeq.sig, alternative="greater", rhs=signal.cmp))
+        sig.est <- as.numeric(mat.test.sig$test$coefficients)
+        pvalue.signal <- as.numeric(mat.test.sig$test$pvalues)
+        result$unm.adj <- data.frame(Data="Unmatched", Method="Adjusted", Dataset.Ref=dataseti, 
+                                   Dataset.Tgt=datasetj, 
+                                   Site=unm.adj.sum$coefficients["factor(Treatment)1", "Estimate"],
+                                   Signal=sig.est - signal.cmp, 
+                                   pvalue.site=unm.adj.sum$coefficients["factor(Treatment)1", "Pr(>|t|)"],
+                                   pvalue.signal=pvalue.signal)
         
-        # linear regression model on the matched subgroup, but marginalized
-        mat.mar.mod <- lm(value ~ factor(Treatment), data=matches)
-        conf.mat.mar <- confint(mat.mar.mod, parm="factor(Treatment)1", level=.95)
-        colnames(conf.mat.mar) <- c("CI.upper", "CI.lower")
-        mat.mar.sum <- summary(mat.mar.mod)$coefficients
-        conf.mat.mar.res <- data.frame(Data="Matched", Method="Marginal", Dataset.Ref=dataseti,
-                                  Dataset.Tgt=datasetj, Site=mat.mar.sum["factor(Treatment)1", "Estimate"],
-                                  Signal=mat.mar.sum["(Intercept)", "Estimate"])
+        ## Partial DCorr
+        dcor.testout <- dsij.stat %>%
+          select(Treatment, Continent, value, Sex, Age) %>%
+          {pdcor.test(as.matrix((.) %>% select(value)), as.matrix((.) %>% select(Treatment)),
+                 as.matrix((.) %>% select(Continent, Sex, Age) %>% 
+                             mutate(Continent = as.numeric(Continent == continent[dataseti]),
+                                    Sex=as.numeric(Sex == 1), Age=as.numeric(Age))),
+                 R=500)}
+        result$pdcor <- data.frame(Data="Unmatched", Method="PDcor", Dataset.Ref=dataseti,
+                                   Dataset.Tgt=datasetj, Site=dcor.testout$estimate,
+                                   Signal=NaN,
+                                   pvalue.site=dcor.testout$p.value,
+                                   pvalue.signal=NaN)
         
+        ## IPW
+        if (ipw) {
+          ipw.dat <- compute_propensities(dsij.stat %>% mutate(Treatment = factor(Treatment),
+                                                               Sex=factor(Sex)), form=form.ipw.prop) %>%
+            mutate(Treatment=factor(Treatment), Sex=factor(Sex), Age=Age-mean(Age), Continent=factor(Continent))
+          ipw.des <- svydesign(ids=~1, weights=ipw.dat$weights, data=ipw.dat, variables=formula(form.ipw.mod))
+          ipw.mod <- svyglm(formula=form.ipw.mod, design=ipw.des)
+          conf.ipw.adj <- confint(ipw.mod, parm="Treatment1", level=.95)
+          colnames(conf.ipw.adj) <- c("CI.upper", "CI.lower")
+          ipw.adj.sum <- summary(ipw.mod)
+          
+          coefeq.sig <- matrix(0, nrow=1, ncol=length(ipw.mod$coefficients))
+          colnames(coefeq.sig) <- names(ipw.mod$coefficients)
+          coefeq.sig[1,"(Intercept)"] <- 1
+          coefeq.sig <- coefeq.sig/sum(coefeq.sig)
+          mat.test.sig <- summary(glht(ipw.mod, coefeq.sig, alternative="greater", rhs=signal.cmp))
+          sig.est <- as.numeric(mat.test.sig$test$coefficients)
+          pvalue.signal <- as.numeric(mat.test.sig$test$pvalues)
+          
+          result$ipw <- data.frame(Data="Trimmed", Method="IPW", Dataset.Ref=dataseti,
+                                     Dataset.Tgt=datasetj,
+                                     Site=unm.adj.sum$coefficients["factor(Treatment)1", "Estimate"],
+                                     Signal=sig.est - signal.cmp, 
+                                     pvalue.site=unm.adj.sum$coefficients["factor(Treatment)1", "Pr(>|t|)"],
+                                     pvalue.signal=pvalue.signal)
+        }
+        
+        if (match) {
+          # 3:1 optimal ratio matching
+          match_obj <- matchit(formula(form.ipw.prop), data=dsij.stat,
+                               method="optimal", ratio=3)
+          matches <- match.data(match_obj)  # ... and fetch the matches themselves
+        
+          ## Matched; Unadjusted
+          mat.mar.mod <- lm(value ~ factor(Treatment), data=matches)
+          conf.mat.mar <- confint(mat.mar.mod, parm="factor(Treatment)1", level=.95)
+          colnames(conf.mat.mar) <- c("CI.upper", "CI.lower")
+          mat.mar.sum <- summary(mat.mar.mod)
+          coefeq.sig <- matrix(0, nrow=1, ncol=length(mat.mar.mod$coefficients))
+          colnames(coefeq.sig) <- names(mat.mar.mod$coefficients)
+          coefeq.sig[1,"(Intercept)"] <- 1
+          coefeq.sig <- coefeq.sig/sum(coefeq.sig)
+          mat.test.sig <- summary(glht(mat.mar.mod, coefeq.sig, alternative="greater", rhs=signal.cmp))
+          sig.est <- as.numeric(mat.test.sig$test$coefficients)
+          pvalue.signal <- as.numeric(mat.test.sig$test$pvalues)
+          result$mat.mar <- data.frame(Data="Matched", Method="Unadjusted", Dataset.Ref=dataseti,
+                                       Dataset.Tgt=datasetj,
+                                       Site=mat.mar.sum$coefficients["factor(Treatment)1", "Estimate"],
+                                       Signal=sig.est - signal.cmp, 
+                                       pvalue.site=mat.mar.sum$coefficients["factor(Treatment)1", "Pr(>|t|)"],
+                                       pvalue.signal=pvalue.signal)
+          
+          ## Matched; Adjusted
+          mat.adj.mod <- lm(mat.adj.form, data=matches)
+          conf.mat.adj <- confint(mat.adj.mod, parm="factor(Treatment)1", level=.95)
+          colnames(conf.mat.adj) <- c("CI.upper", "CI.lower")
+          mat.adj.sum <- summary(mat.adj.mod)
+          
+          coefeq.sig <- matrix(0, nrow=1, ncol=length(mat.adj.mod$coefficients))
+          colnames(coefeq.sig) <- names(mat.adj.mod$coefficients)
+          coefeq.sig[1,"(Intercept)"] <- 1
+          coefeq.sig <- coefeq.sig/sum(coefeq.sig)
+          mat.test.sig <- summary(glht(mat.adj.mod, coefeq.sig, alternative="greater", rhs=signal.cmp))
+          
+          result$mat.adj <- data.frame(Data="Matched", Method="Adjusted", Dataset.Ref=dataseti,
+                                       Dataset.Tgt=datasetj, 
+                                       Site=mat.adj.sum$coefficients["factor(Treatment)1", "Estimate"],
+                                       Signal=as.numeric(mat.test.sig$test$coefficients) - signal.cmp, 
+                                       pvalue.site=mat.adj.sum$coefficients["factor(Treatment)1", "Pr(>|t|)"],
+                                       pvalue.signal=as.numeric(mat.test.sig$test$pvalues))
+          
+          ## Matching
+          mat.mat.mod <- lm(mat.mat.form, data=matches)
+          # take linear combination of slope coefficients for treatment variable
+          coefeq.site <- matrix(data=as.numeric(grepl("Treatment", names(mat.mat.mod$coefficients))),
+                           nrow=1, ncol=length(mat.mat.mod$coefficients))
+          colnames(coefeq.site) <- names(mat.mat.mod$coefficients)
+          mat.mat.sum <- summary(mat.mat.mod)
+          coefeq.sig <- matrix(0, nrow=1, ncol=length(mat.mat.mod$coefficients))
+          colnames(coefeq.sig) <- names(mat.mat.mod$coefficients)
+          coefeq.sig[1,"(Intercept)"] <- 1
+          coefeq.site <- coefeq.site/sum(coefeq.site)
+          coefeq.sig <- coefeq.sig/sum(coefeq.sig)
+          mat.test.site <- summary(glht(mat.mat.mod, coefeq.site, alternative="two.sided", rhs=0))
+          mat.test.sig <- summary(glht(mat.mat.mod, coefeq.sig, alternative="greater", rhs=signal.cmp))
 
-        ipw.dat <- compute_propensities(dsij.stat %>% mutate(Treatment = factor(Treatment),
-                                                             Sex=factor(Sex)), form=form.ipw.prop) %>%
-          mutate(Treatment=factor(Treatment), Sex=factor(Sex), Age=Age-mean(Age))
-        ipw.des <- svydesign(ids=~1, weights=ipw.dat$weights, data=ipw.dat, variables=formula(form.ipw.mod))
-        ipw.mod <- svyglm(formula=form.ipw.mod, design=ipw.des)
-        conf.ipw.adj <- confint(ipw.mod, parm="Treatment1", level=.95)
-        colnames(conf.ipw.adj) <- c("CI.upper", "CI.lower")
-        ipw.adj.sum <- summary(ipw.mod)$coefficients
-        conf.ipw.res <- data.frame(Data="Unmatched", Method="IPW", Dataset.Ref=dataseti,
-                                   Dataset.Tgt=datasetj, Site=ipw.adj.sum["Treatment1", "Estimate"],
-                                   Signal=ipw.adj.sum["(Intercept)", "Estimate"])
-        
-        mat.adj.mod <- lm(mat.adj.form, data=matches)
-        conf.mat.adj <- confint(mat.adj.mod, parm="factor(Treatment)1", level=.95)
-        colnames(conf.mat.adj) <- c("CI.upper", "CI.lower")
-        mat.adj.sum <- summary(mat.adj.mod)$coefficients
-        conf.mat.adj.res <- data.frame(Data="Matched", Method="Adjusted", Dataset.Ref=dataseti,
-                                  Dataset.Tgt=datasetj, Site=mat.adj.sum["factor(Treatment)1", "Estimate"],
-                                  Signal=mat.adj.sum["(Intercept)", "Estimate"])
-        
-        mat.mat.mod <- lm(mat.mat.form, data=matches)
-        # take linear combination of slope coefficients for treatment variable
-        coefeq <- matrix(data=as.numeric(grepl("Treatment", names(mat.mat.mod$coefficients))),
-                         nrow=1, ncol=length(mat.mat.mod$coefficients))
-        colnames(coefeq) <- names(mat.mat.mod$coefficients)
-        coefeq <- coefeq/sum(coefeq)
-        
-        mat.est <- sum(coefeq*mat.mat.mod$coefficients, na.rm=TRUE)
-        conf.mat.res <- data.frame(Data="Matched", Method="Matched", Dataset.Ref=dataseti,
-                                   Dataset.Tgt=datasetj, Site=mat.est,
-                                   Signal=mat.mat.mod$coefficients["(Intercept)"])
-        return(rbind(conf.unm.mar.res, conf.unm.adj.res, conf.ipw.res, 
-                     conf.mat.mar.res, conf.mat.adj.res, conf.mat.res) %>%
-                 mutate(Sxfm=sxfm, Dxfm=dxfm))
-      }, error=function(e) {return(NULL)})
+
+          result$mat <- data.frame(Data="Matched", Method="Matched", Dataset.Ref=dataseti,
+                                   Dataset.Tgt=datasetj,
+                                   Site=as.numeric(mat.test.site$test$coefficients),
+                                   Signal=as.numeric(mat.test.sig$test$coefficients) - signal.cmp,
+                                   pvalue.site=as.numeric(mat.test.site$test$pvalues),
+                                   pvalue.signal=as.numeric(mat.test.sig$test$pvalues))
+        }
+        # bind the results we have and add the overlap scores
+        return(do.call(rbind, result) %>%
+                 mutate(Sxfm=sxfm, Dxfm=dxfm) %>%
+                 left_join(overlap.D, by=c("Dataset.Ref"="Dataset1", "Dataset.Tgt"="Dataset2")))
+      }, error=function(e) {print(e): return(NULL)})
     }))
-  }, mc.cores=detectCores() - 1)) %>%
+  }, mc.cores=detectCores() - 1))
+  
+  test.res <- test.res %>%
     mutate(Approach=sprintf("%s, %s", Data, Method),
-           Approach=factor(Approach, levels=c("Unmatched, Marginal", "Unmatched, Adjusted", "Unmatched, IPW",
-                                              "Matched, Marginal", "Matched, Adjusted",  "Matched, Matched"),
+           Approach=factor(Approach, levels=c("Unmatched, Unadjusted", "Unmatched, Adjusted", 
+                                              "Unmatched, PDcor", "Trimmed, IPW", "Matched, Unadjusted",
+                                              "Matched, Adjusted",  "Matched, Matched"),
                            ordered=TRUE),
            Dataset.Ref=factor(Dataset.Ref, levels=levels(raw.stat$Dataset), ordered=TRUE)) %>%
     arrange(Dataset.Ref, Approach) %>%
@@ -219,59 +494,58 @@ causal_ana <- function(ref.stat,
            Position.Offset=pos.scale*(num.appr - mean(num.appr))/(max(num.appr) - min(num.appr)),
            yintercept=as.numeric(Dataset.Ref) + Position.Offset)
   
-  left.plt <- test.res %>%
-    ggplot(aes(color=Dataset.Ref, shape=Approach)) +
-      geom_point(aes(x=Site, y=yintercept, shape=Approach), size=.9) +
-      scale_y_continuous(breaks=1:length(levels(ref.stat$Dataset)),
-                         labels=levels(test.res$Dataset.Ref), name="Dataset") +
+  for.plt.site <- test.res %>%
+    ggplot(aes(x=Site, y=Dataset.Ref, color=factor(as.numeric(pvalue.site < alpha)),
+               shape=factor(as.numeric(Overlap <= ov.thresh)))) +
+      geom_point(size=.9, position=position_jitter(w=0, h=pos.scale)) +
+      # scale_y_continuous(breaks=1:length(levels(ref.stat$Dataset)),
+      #                    labels=levels(test.res$Dataset.Ref), name="Dataset") +
       geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
-      xlab("Estimated Site Effect") +
-      guides(color=FALSE) +
+      scale_color_manual(breaks=c(0, 1), labels=c("No Effect", "Effect"),
+                         values = c("#FF0000", "#00FF00"), name="Effect Present?") +
+      scale_shape_manual(breaks=c(0, 1), labels=c("Valid", "Invalid"),
+                         values=c(16,17), name="Valid?") +
+      ylab("Dataset") +
+      xlab("Site Effect") +
       theme_bw() +
-      ggtitle("(C) Forest Plot")
+      facet_grid(".~Approach") +
+      ggtitle("(C) Forest Plot of Site Effects")
   
-  result = list()
-  if (is.null(raw.dat)) {
-    result$estimates = test.res
-    g.plt = arrangeGrob(arrangeGrob(conn.plt, ridges.plt, widths=c(.55, .45), nrow=1),
-                arrangeGrob(left.plt),
-                heights=c(.3, .7))
-  } else {
-    rezz <- test.res %>%
-      rename(Site.Xfm=Site) %>%
-      left_join(raw.dat %>% rename(Site.Raw=Site) %>% select(Approach, Dataset.Ref, Dataset.Tgt, Site.Raw),
-                by=c("Dataset.Ref", "Dataset.Tgt", "Approach")) %>%
-      mutate(Abs.Diff=abs(Site.Xfm) - abs(Site.Raw))
-    
-    plt.cmp <- rezz %>%
-      ggplot(aes(color=Dataset.Ref, shape=Approach)) +
-        geom_point(aes(x=Abs.Diff, y=yintercept, shape=Approach), size=.9) +
-        scale_y_continuous(breaks=1:length(levels(ref.stat$Dataset)),
-                           labels=levels(test.res$Dataset.Ref), name="Dataset") +
-        geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
-        xlab("|Reference| - |Raw|") +
-        guides(color=FALSE) +
-        theme_bw() +
-        ggtitle("(D) Comparison of Magnitude of Effect")
-    
-    tabl.appr <- rezz %>%
-      group_by(Approach) %>%
-      filter(!is.na(Abs.Diff)) %>%
-      summarize(Count=length(Abs.Diff), Improve_Count=sum(Abs.Diff < 0), Improve_Pct = Improve_Count/Count,
-                Worsen_Count=sum(Abs.Diff >= 0), Worsen_Pct=Worsen_Count/Count)
-    
-    tabl.plt <- tabl.appr %>%
-      select(Approach, Improve_Pct, Worsen_Pct) %>%
-      pivot_longer(Improve_Pct:Worsen_Pct, names_to=c("Type", ".value"), names_pattern="(.+)_(.+$)") %>%
-      rbind(tabl.appr %>% select(Approach, Count) %>% rename(Pct=Count) %>% mutate(Type="Marginal")) %>%
-      mutate(Type=factor(Type, levels=c("Improve", "Worsen", "Marginal"), ordered=TRUE),
-             color=ifelse(Type != "Marginal", Pct, NaN),
-             text=ifelse(Type != "Marginal", sprintf("%.1f%%", 100*Pct),
-                         sprintf("n=%d", as.integer(Pct)))) %>%
-      ggplot(aes(x=0, y=0, fill=color)) +
+  for.plt.signal <- test.res %>%
+    ggplot(aes(x=Signal, y=Dataset.Ref, color=factor(as.numeric(pvalue.signal < alpha)),
+               shape=factor(as.numeric(Overlap <= ov.thresh)))) +
+      geom_point(size=.9, position=position_jitter(w=0, h=pos.scale)) +
+      # scale_y_continuous(breaks=1:length(levels(ref.stat$Dataset)),
+      #                    labels=levels(test.res$Dataset.Ref), name="Dataset") +
+      geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
+      scale_color_manual(breaks=c(0, 1), labels=c("No Effect", "Effect"),
+                         values = c("#FF0000", "#00FF00"), name="Effect Present?") +
+      scale_shape_manual(breaks=c(0, 1), labels=c("Valid", "Invalid"),
+                         values=c(16,17), name="Valid?") +
+      ylab("Dataset") +
+      xlab("Signal Effect") +
+      theme_bw() +
+      facet_grid(".~Approach") +
+      ggtitle("(D) Forest Plot of Signal Effects")
+  
+  tab.invalid <- test.res %>%
+    group_by(Approach) %>%
+    summarize(Count_Signal=sum(pvalue.signal < alpha),
+              Count_Site=sum(pvalue.site >= alpha),
+              Count_Signal.Site=sum(pvalue.signal < alpha & pvalue.site >= alpha),
+              Count_Invalid=sum(Overlap <= ov.thresh),
+              Count=n()) %>%
+    pivot_longer(Count_Signal:Count_Invalid, names_prefix="Count_", names_to="Type",
+                 values_to="Type.Count") %>%
+    mutate(Fraction=Type.Count/Count, Text=sprintf("%d/%d", Type.Count, Count),
+           Type=recode_factor(Type, "Signal.Site"="Signal + No Site", "Site"="No Site"),
+           Type=factor(Type, levels=c("Signal", "No Site", "Signal + No Site", "Invalid"), ordered=TRUE)) %>%
+    ungroup() %>%
+    ggplot(aes(x=0, y=0, fill=Fraction)) +
         geom_tile() +
-        scale_fill_gradient(low="#ff0000", high="#00ff00", limits=c(0, 1), na.value="white", name="Percent") +
-        geom_text(aes(label=text)) +
+        scale_fill_gradient(low="#ff0000", high="#00ff00", limits=c(0, 1), 
+                            na.value="white", name="Fraction") +
+        geom_text(aes(label=Text)) +
         facet_grid("Approach ~ Type", switch="y") +
         theme_bw() +
         scale_x_continuous(expand = c(0,0), name="") +
@@ -281,16 +555,136 @@ causal_ana <- function(ref.stat,
               axis.text=element_blank(),
               panel.spacing = unit(0, "lines"),
               strip.text.y.left = element_text(angle = 0)) +
-        ggtitle("(E) Percent Improved Magnitude of Batch Effect")
-    g.plt = arrangeGrob(arrangeGrob(conn.plt, ridges.plt, widths=c(.55, .45), nrow=1),
-                arrangeGrob(left.plt + theme(legend.position="None"), 
-                            plt.cmp + theme(legend.position="None"), widths=c(.5, .5), nrow=1),
-                tabl.plt,
-                heights=c(.33, .5, .2))
+        ggtitle("(E) Fraction of Effects Detected")
+      
+  cmp.tab <- test.res %>%
+    filter(Data == "Unmatched") %>%
+    select(Site, pvalue.site, Approach, Dataset.Ref, Dataset.Tgt) %>%
+    right_join(test.res %>% 
+                filter(Data != "Unmatched") %>% 
+                select(Site, pvalue.site, Approach, Dataset.Ref, Dataset.Tgt) %>%
+                rename(Site.Matched=Site, Approach.Matched=Approach,
+                       pvalue.site.matched=pvalue.site),
+              by=c("Dataset.Ref", "Dataset.Tgt")) %>%
+    group_by(Approach, Approach.Matched) %>%
+    summarize(`Count_Unmatched.Only`=sum(pvalue.site.matched > alpha & pvalue.site <= alpha),
+              `Count_Matched.Only`=sum(pvalue.site.matched <= alpha & pvalue.site > alpha),
+              `Count_Both`=sum(pvalue.site.matched <= alpha & pvalue.site <= alpha),
+              `Count_Neither`=sum(pvalue.site.matched > alpha & pvalue.site > alpha),
+              Count=n()) %>%
+    pivot_longer(Count_Unmatched.Only:Count_Neither, names_prefix="Count_", names_to="Type",
+                 values_to="Type.Count") %>%
+    mutate(Fraction=Type.Count/Count, Text=sprintf("%d/%d", Type.Count, Count),
+           Type=recode_factor(Type, "Unmatched.Only"="Only Unmatched",
+                              "Matched.Only"="Only Matched"),
+           Type=factor(Type, levels=c("Only Unmatched", "Only Matched", "Both", "Neither"), 
+                       ordered=TRUE)) %>%
+    ungroup() %>%
+    ggplot(aes(x=Type, y=0, fill=Fraction)) +
+        geom_tile() +
+        scale_fill_gradient(low="#ff0000", high="#00ff00", limits=c(0, 1), 
+                            na.value="white", name="Fraction") +
+        geom_text(aes(label=Text)) +
+        facet_grid("Approach ~ Approach.Matched", switch="y") +
+        theme_bw() +
+        scale_x_discrete(expand = c(0,0), name="Effect Type") +
+        scale_y_continuous(expand=c(0,0),  name="Ignore Metadata") +
+        theme(axis.ticks.y = element_blank(),
+              axis.line.y = element_blank(),
+              axis.text.y=element_blank(),
+              axis.text.x=element_text(angle=90),
+              panel.spacing = unit(0, "lines"),
+              strip.text.y.left = element_text(angle = 0)) +
+        ggtitle("(F) Do we need to account for the Metadata Distributions to detect Site Effects?")
+  
+  out.res = list()
+  if (is.null(raw.dat)) {
+    g.plt = arrangeGrob(arrangeGrob(conn.plt, ridges.plt, ridges.plt.cont,
+                                    widths=c(.55, .45, .45), nrow=1),
+                arrangeGrob(for.plt.site, for.plt.signal, tab.invalid, cmp.tab,
+                            heights=c(1,1,.6, .7)),
+                heights=c(.2, .8))
+  } else {
+    rezz <- test.res %>%
+      rename(Site.Xfm=Site) %>%
+      left_join(raw.dat %>% rename(Site.Raw=Site, Signal.Raw=Signal) %>%
+                  select(Approach, Dataset.Ref, Dataset.Tgt, Site.Raw, Signal.Raw),
+                by=c("Dataset.Ref", "Dataset.Tgt", "Approach")) %>%
+      mutate(Abs.Diff=abs(Site.Xfm) - abs(Site.Raw), Sig.Diff=Signal - Signal.Raw)
+    
+    plt.site.cmp.to.raw <- rezz %>%
+      ggplot(aes(x=Abs.Diff, y=Dataset.Ref, color=factor(as.numeric(pvalue.site < alpha)),
+                 shape=factor(as.numeric(Overlap <= ov.thresh)))) +
+        geom_point(size=.9, position=position_jitter(w=0, h=pos.scale)) +
+        geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
+        scale_color_manual(breaks=c(0, 1), labels=c("No Effect", "Effect"),
+                           values = c("#FF0000", "#00FF00"), name="Effect Present After Xfm?") +
+        scale_shape_manual(breaks=c(0, 1), labels=c("Valid", "Invalid"),
+                           values=c(16,17), name="Valid?") +
+        ylab("Dataset") +
+        xlab("|Site Effect after Xfm| - |Raw Site Effect|") +
+        theme_bw() +
+        facet_grid(".~Approach") +
+        ggtitle("(G) Forest Plot of Change in Site Effect")
+    
+    plt.sig.cmp.to.raw <- rezz %>%
+    ggplot(aes(x=Sig.Diff, y=Dataset.Ref, color=factor(as.numeric(pvalue.signal < alpha)),
+               shape=factor(as.numeric(Overlap <= ov.thresh)))) +
+      geom_point(size=.9, position=position_jitter(w=0, h=pos.scale)) +
+      geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
+      scale_color_manual(breaks=c(0, 1), labels=c("No Effect", "Effect"),
+                         values = c("#FF0000", "#00FF00"), name="Effect Present After Xfm?") +
+      scale_shape_manual(breaks=c(0, 1), labels=c("Valid", "Invalid"),
+                         values=c(16,17), name="Valid?") +
+      ylab("Dataset") +
+      xlab("Signal Effect after Xfm - Raw Signal Effect") +
+      theme_bw() +
+      facet_grid(".~Approach") +
+      ggtitle("(H) Forest Plot of Change in Signal Effect")
+    
+    tabl.appr <- rezz %>%
+      group_by(Approach) %>%
+      filter(!is.na(Abs.Diff)) %>%
+      summarize(Count=n(), Count_Improve.Site=sum(Abs.Diff < 0),
+                Count_Improve.Signal=sum(Sig.Diff > 0),
+                Count_Improve.Site.Improve.Signal=sum(Abs.Diff < 0 & Sig.Diff > 0),
+                Count_Improve.Site.Signal=sum(Abs.Diff < 0 & pvalue.signal < alpha)) %>%
+      pivot_longer(Count_Improve.Site:Count_Improve.Site.Signal, names_prefix="Count_", names_to="Type",
+                 values_to="Type.Count") %>%
+      mutate(Fraction=Type.Count/Count, Text=sprintf("%d/%d", Type.Count, Count),
+              Type=recode_factor(Type, "Improve.Site.Signal"="Improve Site + Sig. Signal", 
+                              "Improve.Site"="Improve Site",
+                              "Improve.Signal"="Improve Signal",
+                              "Improve.Site.Improve.Signal"="Improve Site + Signal"),
+            Type=factor(Type, levels=c("Improve Site", "Improve Signal",
+                                      "Improve Site + Sig. Signal", "Improve Site + Signal"),
+                       ordered=TRUE)) %>%
+      ungroup() %>%
+      ggplot(aes(x=0, y=0, fill=Fraction)) +
+          geom_tile() +
+          scale_fill_gradient(low="#ff0000", high="#00ff00", limits=c(0, 1), 
+                              na.value="white", name="Fraction") +
+          geom_text(aes(label=Text)) +
+          facet_grid("Approach ~ Type", switch="y") +
+          theme_bw() +
+          scale_x_continuous(expand = c(0,0), name="") +
+          scale_y_continuous(expand=c(0,0),  name="Approach") +
+          theme(axis.ticks = element_blank(),
+                axis.line = element_blank(),
+                axis.text=element_blank(),
+                panel.spacing = unit(0, "lines"),
+                strip.text.y.left = element_text(angle = 0))
+    
+    g.plt = arrangeGrob(arrangeGrob(conn.plt, ridges.plt, ridges.plt.cont, 
+                                    widths=c(.55, .45, .45), nrow=1),
+                arrangeGrob(for.plt.site, for.plt.signal, tab.invalid, cmp.tab,
+                            plt.site.cmp.to.raw, plt.sig.cmp.to.raw, tabl.appr,
+                            heights=c(1,1,.6, .7, 1, 1, .6)),
+                heights=c(.2, 1.5))
   }
-  result$estimates <- test.res
-  result$plot <- g.plt
-  return(result)
+  out.res$estimates <- test.res
+  out.res$plot <- g.plt
+  return(out.res)
 }
 
 comparison_plt <- function(raw, ...) {
@@ -332,19 +726,39 @@ We have the following covariates of interest in our dataset:
 + $A_{ikj}$: the age of the individual $i,j,k$;
 + $C_{ikj}$: the continent on which individual $i,j,k$ was measured.
 
-### Models of Interest
+### Tests Employed
 
-+ Unmatched, Marginal: For the indicated dataset, compute the coefficient associated with the desired response, and compute the effect size over the entire dataset (2617 rows). This corresponds to the model:
++ Unmatched, Unadjusted: For the indicated pair of datasets, compute the coefficient associated with the desired response. This corresponds to the model:
+\begin{align*}
+  y_{ikj} = \beta_{trt}\mathbb{I}\left\{k = 1\right\} + \beta_0
+\end{align*}
+Inference is performed directly on $\beta_{trt}$ for the site effect, using $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$ via the two-sided $t$-test. The site effect is measured via the two-sided $t$ test, with $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$. The signal effect is measured via the one-sided $t$ test, with $H_0: \beta_0 = \mu$ against $H_a: \beta_0 > \mu$, where $\mu$ is $0$ (the effect of interest is a difference in connectivity) or the population average graph weight (the effect of interest is the mean connectivity in an area).
+
++ Unmatched, Adjusted: For the indicated pair of datasets we fit the same marginal model as before:
+\begin{align*}
+  y_{ikj} = \beta_{sex}\mathbb{I} \left\{S_{ijk} = \textrm{"male"}\right\} + \beta_{age}A_{ijk} + \beta_{trt}\mathbb{I}\left\{k = 1\right\} + \beta_0
+\end{align*} 
+Inference is performed directly on $\beta_{trt}$ for the site effect, using $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$ via the two-sided $t$-test. The signal effect is measured via the one-sided $t$ test, with $H_0: \beta_0 = \mu$ against $H_a: \beta_0 > \mu$, where $\mu$ is $0$ (the effect of interest is a difference in connectivity) or the population average graph weight (the effect of interest is the mean connectivity in an area).
+
++ Unmatched, Partial DCorr: For each pair of datasets, we have the triplet $(X_i, Y_i, Z_i)$ where $X_i$ is our response of interest, $Y_i$ is the dataset membership indicator, and $Z_i$ are the dataset covariates (Continent, Sex, and Age). We estimate:
+\begin{align*}
+  \textrm{PDcorr}(X_i, Y_i | Z_i)
+\end{align*}
+as computed via the `energy` package. 
+
++ Trimmed, IPW: Inverse probability weighting is used on the propensity scores to obtain weights associated with each element in the control group. These weights are an estimate of the probability of being treated given the control individual's covariates (Sex, Age, and Continent). Trimming is performed to restrict only to control individuals for whom the weights exceed $.01$.  Inference is performed directly on $\beta_{trt}$ for the site effect, using $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$ via the two-sided $t$-test. The signal effect is measured via the one-sided $t$ test, with $H_0: \beta_0 = \mu$ against $H_a: \beta_0 > \mu$, where $\mu$ is $0$ (the effect of interest is a difference in connectivity) or the population average graph weight (the effect of interest is the mean connectivity in an area).
+
++ Matched, Unadjusted: For the indicated pair of datasets, we fit the same unadjusted model as before:
 \begin{align*}
   y_{ikj} = \beta_{sex}\mathbb{I} \left\{S_{ijk} = \textrm{"male"}\right\} + \beta_{age}A_{ijk} + \beta_{trt}\mathbb{I}\left\{k = 1\right\} + \beta_0
 \end{align*}
-Inference is performed directly on $\beta_{trt}$. The test employed is the two-sided $t$ test, with $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$.
+but restricted to a matched subset of the two datasets. Inference is performed directly on $\beta_{trt}$ for the site effect, using $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$ via the two-sided $t$-test. The signal effect is measured via the one-sided $t$ test, with $H_0: \beta_0 = \mu$ against $H_a: \beta_0 > \mu$, where $\mu$ is $0$ (the effect of interest is a difference in connectivity) or the population average graph weight (the effect of interest is the mean connectivity in an area).
 
-+ Matched, Marginal: Matching is performed, and a dataset with $n < 2617$ rows is produced, containing for each treated item $i'$, $n'_i = 1$ matches associated with treated item $i$ from a second dataset $j$. In this context, $k \in \left\{0, 1\right\}$, for $k=1$ $j=1$, and for $k=0$, $j \in [n_i']$. We fit the same marginal model as before:
++ Matched, Adjusted: For the indicated pair of datasets We fit the same adjusted model as before:
 \begin{align*}
-  y_{ikj} = \beta_{sex}\mathbb{I}\left\{S_{ijk} = \textrm{"male"}\right\} + \beta_{age}A_{ijk}  + \beta_{trt}\mathbb{I}\left\{k = 1\right\} + \beta_0
+  y_{ikj} = \beta_{sex}\mathbb{I} \left\{S_{ijk} = \textrm{"male"}\right\} + \beta_{age}A_{ijk} + \beta_{trt}\mathbb{I}\left\{k = 1\right\} + \beta_0
 \end{align*}
-With inference again performed directly on $\beta_{trt}$. The test employed is the two-sided $t$ test, with $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$.
+but restricted to a matched subset of the two datasets. Inference is performed directly on $\beta_{trt}$ for the site effect, using $H_0: \beta_{trt} = 0$ against $H_a: \beta_{trt} \neq 0$ via the two-sided $t$-test. The signal effect is measured via the one-sided $t$ test, with $H_0: \beta_0 = \mu$ against $H_a: \beta_0 > \mu$, where $\mu$ is $0$ (the effect of interest is a difference in connectivity) or the population average graph weight (the effect of interest is the mean connectivity in an area).
 
 + Matched, Matched: Matching is performed, and a dataset with $n < 2617$ rows is produced, using the same strategy as noted above. In this case, we instead fit a model with global coefficients for sex, age, and an intercept, but for each subclass, we also fit a subclass-specific intercept and slope as well. Let $n_t$ denote the total number of treated individuals (the number of observations in our particular dataset). This corresponds to the model:
 \begin{align*}
@@ -358,7 +772,7 @@ Where $w_i$ is a weight vector which sums to $1$. The test employed is the two-s
 
 ### Matching Strategies
 
-The matching strategy employed in this notebook is $1: 1$ optimal ratio matching using the `MatchIt` package. Datasets are only compared if they are from the same continent, and multivariate matching is performed on the basis of sex and age.
+The matching strategy employed in this notebook is $3: 1$ using the `MatchIt` package. We use exact matching on the basis of continent and optimal matching on the basis of Sex and Age.
 
 # Statistics {.tabset}
 
@@ -372,76 +786,76 @@ Outcomes correspond to the mean connectivity in the homotopic (bilateral) edges.
 
 #### Raw Data {.tabset}
 
-```{r, fig.height=4, fig.width=10}
-raw <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", pos.scale=.6)
+```{r, warning=FALSE, fig.height=4, fig.width=13}
+raw <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", pos.scale=.25)
 zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Z-Score",
-                  pos.scale = .6)
+                  pos.scale = .25)
 ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Ranked",
-                     pos.scale = .6)
+                     pos.scale = .25)
 combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="ComBat",
-                    pos.scale=.6)
+                    pos.scale=.25)
 comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 ```
 
 ##### No Site Correction
 
-```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=16, fig.width=11, warning=FALSE}
 plot(raw$plot)
 ```
 
 ##### Z-Scored
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(zsc$plot)
 ```
 
 ##### Ranked
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(ranked$plot)
 ```
 
 ##### ComBat
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(combt$plot)
 ```
 
 
 #### Ranked Data {.tabset}
 
-```{r, fig.height=4, fig.width=10}
-raw <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", pos.scale=.6)
+```{r, warning=FALSE, fig.height=4, fig.width=13}
+raw <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", pos.scale=.25)
 zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Z-Score",
-                  pos.scale = .6)
+                  pos.scale = .25)
 ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Ranked",
-                     pos.scale = .6)
+                     pos.scale = .25)
 combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="ComBat",
-                    pos.scale=.6)
+                    pos.scale=.25)
 comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 ```
 
 ##### No Site Correction
 
-```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=16, fig.width=11, warning=FALSE}
 plot(raw$plot)
 ```
 
 ##### Z-Scored
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(zsc$plot)
 ```
 
 ##### Ranked
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(ranked$plot)
 ```
 
 ##### ComBat
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(combt$plot)
 ```
 
@@ -454,79 +868,79 @@ Outcomes correspond to the difference in mean connectivity in the homotopic (bil
 
 #### Raw Data {.tabset}
 
-```{r, fig.height=4, fig.width=10}
+```{r, warning=FALSE, fig.height=4, fig.width=13}
 raw <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", measure="Difference",
-                  pos.scale=.6)
+                  pos.scale=.25)
 zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Z-Score",
-                  pos.scale = .6, measure="Difference")
+                  pos.scale = .25, measure="Difference")
 ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Ranked",
-                     pos.scale = .6, measure="Difference")
+                     pos.scale = .25, measure="Difference")
 combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="ComBat", 
-                    pos.scale=.6, measure="Difference")
+                    pos.scale=.25, measure="Difference")
 comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 ```
 
 
 ##### No Site Correction
 
-```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=16, fig.width=11, warning=FALSE}
 plot(raw$plot)
 ```
 
 ##### Z-Scored
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(zsc$plot)
 ```
 
 ##### Ranked
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(ranked$plot)
 ```
 
 ##### ComBat
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(combt$plot)
 ```
 
 
 #### Ranked Data {.tabset}
 
-```{r, fig.height=4, fig.width=10}
+```{r, warning=FALSE, fig.height=4, fig.width=13}
 raw <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", measure="Difference",
-                  pos.scale=.6)
+                  pos.scale=.25)
 zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Z-Score",
-                  pos.scale = .6, measure="Difference")
+                  pos.scale = .25, measure="Difference")
 ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Ranked",
-                     pos.scale = .6, measure="Difference")
+                     pos.scale = .25, measure="Difference")
 combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="ComBat", 
-                    pos.scale=.6, measure="Difference")
+                    pos.scale=.25, measure="Difference")
 comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 ```
 
 ##### No Site Correction
 
-```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=16, fig.width=11, warning=FALSE}
 plot(raw$plot)
 ```
 
 ##### Z-Scored
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(zsc$plot)
 ```
 
 ##### Ranked
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(ranked$plot)
 ```
 
 ##### ComBat
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(combt$plot)
 ```
 
@@ -540,78 +954,78 @@ The outcome is the mean homophilic (same-hemisphere) connectivity.
 
 #### Raw Data {.tabset}
 
-```{r, fig.height=4, fig.width=10}
+```{r, warning=FALSE, fig.height=4, fig.width=13}
 raw <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", measure="mean",
-                  pos.scale=.6, community="Homophilic")
+                  pos.scale=.25, community="Homophilic")
 zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Z-Score",
-                  pos.scale = .6, measure="mean", community="Homophilic")
+                  pos.scale = .25, measure="mean", community="Homophilic")
 ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Ranked",
-                     pos.scale = .6, measure="mean", community="Homophilic")
+                     pos.scale = .25, measure="mean", community="Homophilic")
 combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="ComBat", 
-                    pos.scale=.6, measure="mean", community="Homophilic")
+                    pos.scale=.25, measure="mean", community="Homophilic")
 comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 ```
 
 ##### No Site Correction
 
-```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=16, fig.width=11, warning=FALSE}
 plot(raw$plot)
 ```
 
 ##### Z-Scored
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(zsc$plot)
 ```
 
 ##### Ranked
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(ranked$plot)
 ```
 
 ##### ComBat
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(combt$plot)
 ```
 
 
 #### Ranked Data {.tabset}
 
-```{r, fig.height=4, fig.width=10}
+```{r, warning=FALSE, fig.height=4, fig.width=13}
 raw <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", measure="mean",
-                  pos.scale=.6, community="Homophilic")
+                  pos.scale=.25, community="Homophilic")
 zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Z-Score",
-                  pos.scale = .6, measure="mean", community="Homophilic")
+                  pos.scale = .25, measure="mean", community="Homophilic")
 ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Ranked",
-                     pos.scale = .6, measure="mean", community="Homophilic")
+                     pos.scale = .25, measure="mean", community="Homophilic")
 combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="ComBat", 
-                    pos.scale=.6, measure="mean", community="Homophilic")
+                    pos.scale=.25, measure="mean", community="Homophilic")
 comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 ```
 
 ##### No Site Correction
 
-```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=16, fig.width=11, warning=FALSE}
 plot(raw$plot)
 ```
 
 ##### Z-Scored
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(zsc$plot)
 ```
 
 ##### Ranked
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(ranked$plot)
 ```
 
 ##### ComBat
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(combt$plot)
 ```
 
@@ -621,77 +1035,77 @@ The outcome is the difference in connectivity between homophilic (same-hemispher
 
 #### Raw Data {.tabset}
 
-```{r, fig.height=4, fig.width=10}
+```{r, warning=FALSE, fig.height=4, fig.width=13}
 raw <- causal_ana(raw.stat, raw.gr, sxfm="Raw", dxfm="Raw", measure="Difference",
-                  pos.scale=.6, community="Homophilic")
+                  pos.scale=.25, community="Homophilic")
 zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Z-Score",
-                  pos.scale = .6, measure="Difference", community="Homophilic")
+                  pos.scale = .25, measure="Difference", community="Homophilic")
 ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="Ranked",
-                     pos.scale = .6, measure="Difference", community="Homophilic")
+                     pos.scale = .25, measure="Difference", community="Homophilic")
 combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Raw", dxfm="ComBat", 
-                    pos.scale=.6, measure="Difference", community="Homophilic")
+                    pos.scale=.25, measure="Difference", community="Homophilic")
 comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 ```
 
 ##### No Site Correction
 
-```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=16, fig.width=11, warning=FALSE}
 plot(raw$plot)
 ```
 
 ##### Z-Scored
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(zsc$plot)
 ```
 
 ##### Ranked
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(ranked$plot)
 ```
 
 ##### ComBat
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(combt$plot)
 ```
 
 
 #### Ranked Data {.tabset}
 
-```{r, fig.height=4, fig.width=10}
+```{r, warning=FALSE, fig.height=4, fig.width=13}
 raw <- causal_ana(raw.stat, raw.gr, sxfm="Ranked", dxfm="Raw", measure="Difference",
-                  pos.scale=.6, community="Homophilic")
+                  pos.scale=.25, community="Homophilic")
 zsc <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Z-Score",
-                  pos.scale = .6, measure="Difference", community="Homophilic")
+                  pos.scale = .25, measure="Difference", community="Homophilic")
 ranked <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="Ranked",
-                     pos.scale = .6, measure="Difference", community="Homophilic")
+                     pos.scale = .25, measure="Difference", community="Homophilic")
 combt <- causal_ana(raw.stat, raw.gr, raw.dat=raw$estimates, sxfm="Ranked", dxfm="ComBat", 
-                    pos.scale=.6, measure="Difference", community="Homophilic")
+                    pos.scale=.25, measure="Difference", community="Homophilic")
 comparison_plt(raw$estimates, ranked$estimates, combt$estimates)
 ```
 
 ##### No Site Correction
 
-```{r, fig.height=12, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=16, fig.width=11, warning=FALSE}
 plot(raw$plot)
 ```
 
 ##### Z-Scored
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(zsc$plot)
 ```
 
 ##### Ranked
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(ranked$plot)
 ```
 
 ##### ComBat
 
-```{r, fig.height=13, fig.width=9, warning=FALSE, message=FALSE}
+```{r, fig.height=33, fig.width=12, warning=FALSE}
 plot(combt$plot)
 ```
