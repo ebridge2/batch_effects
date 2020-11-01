@@ -61,7 +61,8 @@ causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=500) {
                                   as.matrix(cov.dat.ij.trim %>% dplyr::select(Continent, Sex, Age)), R=R)
           result$trim <- data.frame(Data="Trimmed", Method="PDcor", Dataset.Trt=dset.i,
                                     Dataset.Ctrl=dset.j, Effect=test.trim$estimate,
-                                    PValue=test.trim$p.value)
+                                    p.value=test.trim$p.value, Overlap=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i),
+                                                                                       cov.dat.ij %>% filter(Dataset == dset.j)))
         }
       }
       return(do.call(rbind, result) %>%
@@ -183,4 +184,52 @@ causal_ana_cov_cont <- function(Dmtx.dat, cov.dat, nboots=100, R=1000) {
     })
   }, mc.cores=ncores))
   return(rbind(result.sex, result.age))
+}
+
+overlap_dist <- function(X) {
+  datasets = levels(X$Dataset)
+  D=sapply(unique(levels(X$Dataset)), function(dataseti) {
+    sapply(unique(levels(X$Dataset)), function(datasetj) {
+      suppressMessages(
+        compute_overlap(X %>% filter(Dataset == dataseti) %>% ungroup(),
+                        X %>% filter(Dataset == datasetj) %>% ungroup()))
+    })
+  })
+  colnames(D) <- rownames(D) <- levels(X$Dataset)
+  data.frame(Dataset1=colnames(D)[col(D)], Dataset2=rownames(D)[row(D)],
+             Overlap=c(D)) %>%
+    mutate(Dataset1=factor(Dataset1, levels=levels(X$Dataset), ordered=TRUE),
+           Dataset2=factor(Dataset2, levels=levels(X$Dataset), ordered=TRUE)) %>%
+    arrange(Dataset1, Dataset2)
+}
+
+compute_overlap <- function(X1, X2) {
+  # probability of drawing two individuals with the same sex
+  X1.sex <- X1 %>%
+    group_by(Sex) %>%
+    summarize(Per=n(), .groups="keep") %>%
+    ungroup() %>%
+    mutate(Per=Per/sum(Per))
+  X2.sex <- X2 %>%
+    group_by(Sex) %>%
+    summarize(Per=n(), .groups="keep") %>%
+    ungroup() %>%
+    mutate(Per=Per/sum(Per))
+  range.age <- c(min(X1$Age, X2$Age), max(X1$Age, X2$Age))
+  per.ov <- sum(sapply(1:2, function(sex) {
+    tryCatch({
+      ov.sex.X1 <- (X1.sex %>% filter(Sex == sex))$Per
+      ov.sex.X2 <- (X2.sex %>% filter(Sex == sex))$Per
+      X1.sex.age <- (X1 %>% filter(Sex == sex) %>% select(Age))$Age
+      X2.sex.age <- (X2 %>% filter(Sex == sex) %>% select(Age))$Age
+      # obtain pdf for age
+      X1.dens <- density(as.numeric(X1.sex.age), from=min(range.age), to=max(range.age))
+      X1.dens$y <- X1.dens$y/sum(X1.dens$y)
+      X2.dens <- density(as.numeric(X2.sex.age), from=min(range.age), to=max(range.age))
+      X2.dens$y <- X2.dens$y/sum(X2.dens$y)
+      ov.sex.age <- sum(pmin(X1.dens$y*ov.sex.X1, X2.dens$y*ov.sex.X2))
+      return(ov.sex.age)
+    }, error=function(e) {return(0)})
+  }))
+  return(as.numeric(unique((X1$Continent)) == unique(X2$Continent))*per.ov)
 }
