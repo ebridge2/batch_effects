@@ -3,7 +3,6 @@ aal.homo.gr <- matrix(0, nrow=116, ncol=116)
 sdiag(aal.homo.gr, k=1) <- rep(c(1, 0), 116/2)[1:(116-1)]
 sdiag(aal.homo.gr, k=-1) <- rep(c(1, 0), 116/2)[1:(116-1)]
 aal.homo.gr <- as.vector(aal.homo.gr)
-aal.homo.gr <- aal.homo.gr[retain.dims]
 
 aal.hetero.gr <- matrix(0, nrow=116, ncol=116)
 for (i in 1:116) {
@@ -16,13 +15,11 @@ des.homo.gr <- matrix(0, nrow=70, ncol=70)
 sdiag(des.homo.gr, k = 35) <- 1
 sdiag(des.homo.gr, k=-35) <- 1
 des.homo.gr <- as.vector(des.homo.gr)
-des.homo.gr <- des.homo.gr[retain.dims]
 
 des.hetero.gr <- matrix(0, nrow=70, ncol=70)
 des.hetero.gr[(70/2 + 1):70, (70/2 + 1):70] <- 1
 des.hetero.gr[1:(70/2), 1:(70/2)] <- 1
 des.hetero.gr <- as.vector(des.hetero.gr)
-des.hetero.gr <- des.hetero.gr[retain.dims]
 
 aal.comm <- list(Homotopic=aal.homo.gr, Homophilic=aal.hetero.gr)
 des.comm <- list(Homotopic=des.homo.gr, Homophilic=des.hetero.gr)
