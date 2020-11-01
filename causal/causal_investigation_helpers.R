@@ -233,3 +233,36 @@ compute_overlap <- function(X1, X2) {
   }))
   return(as.numeric(unique((X1$Continent)) == unique(X2$Continent))*per.ov)
 }
+
+signal_ana <- function(data, cov.dat, parcellation="AAL") {
+  parcel.comm <- parcel.comm[[parcellation]]
+  do.call(rbind, lapply(names(parcel.comm), function(community) {
+    cmp.gr <- parcel.comm[[community]]
+    do.call(rbind, mclapply(1:dim(data)[1], function(i) {
+      dmeas <- data[i,]
+      signal <- median(dmeas[cmp.gr == 1]) - median(dmeas[cmp.gr == 0])
+      test.res <- wilcox.test(dmeas[cmp.gr == 1], dmeas[cmp.gr == 0], alternative = "greater")
+      return(data.frame(Dataset=cov.dat[i,"Dataset"], Subid=cov.dat[i,"Subid"], Session=cov.dat[i,"Session"],
+                        Signal=signal, Comparison=cmp, Effect.Size=test.res$statistic, p.value=test.res$p.value,
+                        Community=community, Parcellation=parcellation))
+    }, mc.cores = ncores))
+  }))
+}
+apply.along.dataset <- function(data, datasets, fn) {
+  for (dataset in unique(datasets)) {
+    this.dset <- data[datasets==dataset,]
+    data[datasets == dataset,] <- apply(this.dset, c(2), fn)
+  }
+  return(data)
+}
+
+zsc.batch <- function(x, datasets) {
+  return((x - mean(x))/sd(x))
+}
+
+ptr.batch <- function(x, datasets) {
+  nz <- which(x != 0)
+  x_rank = rank(x[nz])/(length(nz))
+  x[nz] <- x_rank
+  return(x)
+}
