@@ -19,34 +19,44 @@ n.vertices <- 116
 pheno.path <- file.path(in.path, 'phenotypic/CoRR_AggregatedPhenotypicData.csv')
 ncores <- detectCores() - 1
 parcellation <- "AAL"
-modality <- "dMRI"
+modality <- "fMRI"
 mri.path <- file.path(in.path, modality, parcellation)
-
-
-cov.dat.dset <- cov.dat %>%
-  filter(Dataset == dataset)
-
-Dmtx.dat.dset <- as.dist(Dmtx.dat[cov.dat.dset$id, cov.dat.dset$id])
-compute_effect(Dmtx.dat.dset, cov.dat.dset, "Sex", "Age")
 
 datasets=c("UWM", "NYU_1", "Utah1", "MRN1", "IBATRT", "UPSM_1", "NYU_2",
            "BMB1", "IPCAS_8", "IPCAS_4", "SWU3", "SWU2", "IACAS_1", "JHNU",
            "IPCAS_5", "IPCAS_2", "IPCAS_3", "BNU1", "IPCAS_1", "BNU2",
            "SWU1", "IPCAS_7", "BNU3", "XHCUMS", "HNU1", "SWU4")
 
-gr.names <- list.files(path=fmri.path, pattern="*.csv", recursive=TRUE)
+gr.names <- list.files(path=mri.path, pattern="*.csv", recursive=TRUE)
 gr.names <- gr.names[sapply(gr.names, function(name) any(sapply(datasets, function(dataset) {str_detect(name, dataset)})))]
 vertices <- 1:n.vertices
 fmt <- 'ncol'
 
-gr.dat <- t(simplify2array(mclapply(gr.names, function(name) {
-  tgr <- get.adjacency(igraph::read_graph(paste0(fmri.path,name), format=fmt, predef=vertices), type="both", attr="weight", sparse=FALSE)
-  diag(tgr) <- 0
-  return(as.vector(tgr))
-}, mc.cores=ncores)))
+list2array <- function(x) {
+  good.ids <- !sapply(x, function(xi) is.null(xi))
+  x <- x[good.ids]
+  return(list(good.ids=good.ids, result=t(simplify2array(x))))
+}
+gr.out <- list2array(mclapply(gr.names, function(name) {
+  tryCatch({
+    g <- igraph::read_graph(file.path(mri.path, name), format=fmt)
+    V.incl <- as.numeric(V(g)$name)
+    V.notincl <- (1:116)[!sapply(1:116, function(i) i %in% V.incl)]
+    if (length(V.notincl) > 0) {
+      g <- add_vertices(g, length(V.notincl), attr=list(name=as.character(V.notincl)))
+    }
+    g.perm <- permute.vertices(g, as.numeric(V(g)$name))
+    g.adj <- get.adjacency(g.perm, type="both", attr="weight", sparse=FALSE)
+    diag(g.adj) <- 0
+    return(as.vector(g.adj))
+  }, error=function(e) {
+    return(NULL)
+  })
+}, mc.cores=ncores))
+gr.dat <- gr.out$result; good.ids <- gr.out$good.ids
 
 cov.full <- read.csv(pheno.path)
-spl.names <- strsplit(basename(gr.names), '_|-')
+spl.names <- strsplit(basename(gr.names[good.ids]), '_|-')
 dset.names <- strsplit(gr.names, '/')
 cov.dat <- do.call(rbind, mclapply(1:length(spl.names), function(i) {
   spl.name <- spl.names[[i]]; dset.name <- dset.names[[i]]
@@ -85,10 +95,14 @@ cov.dat <- cov.dat[retain.ids,] %>%
                        Sex=factor(Sex))
 gr.dat <- gr.dat[retain.ids,]
 
-retain.dims <- sapply(1:dim(gr.dat)[2], function(j) var(gr.dat[,j])) > 0
+retain.dims <- sapply(1:dim(gr.dat)[2], function(j) {
+  all(sapply(unique(cov.dat$Dataset), function(dataset) {
+    var(gr.dat[cov.dat$Dataset == dataset,j]) > 0
+  }))
+})
 gr.dat <- gr.dat[,retain.dims]
 
-results.cont <- lapply(c("Raw", "Ranked", "Z-Score", "ComBat"), function(norm) {
+results <- lapply(c("Raw", "Ranked", "Z-Score", "ComBat"), function(norm) {
   if (norm == "ComBat") {
     dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset))
   } else if (norm == "Z-Score") {
@@ -103,12 +117,12 @@ results.cont <- lapply(c("Raw", "Ranked", "Z-Score", "ComBat"), function(norm) {
 
   result.site <- causal_ana_site(Dmtx.norm, cov.dat, mc.cores=ncores)
   result.cov <- causal_ana_cov(Dmtx.norm, cov.dat, mc.cores=ncores)
-  result.cov.cont <- causal_ana_cov_cont(Dmtx.norm, cov.dat, mc.cores=ncores)
+  #result.cov.cont <- causal_ana_cov_cont(Dmtx.norm, cov.dat, mc.cores=ncores)
   result.signal <- signal_ana(dat.norm, cov.dat, parcellation=parcellation, mc.cores=ncores,
                               retain.dims=retain.dims)
   return(list(Site=result.site %>% mutate(Method=norm),
               Covariate=result.cov %>% mutate(Method=norm),
-              Covariate.Cont=result.cov.cont %>% mutate(Method=norm),
+              #Covariate.Cont=result.cov.cont %>% mutate(Method=norm),
               Signal=result.signal %>% mutate(Method=norm)))
 })
 
