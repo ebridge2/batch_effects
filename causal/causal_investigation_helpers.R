@@ -1,3 +1,16 @@
+require(tidyverse)
+require(MatchIt)
+require(dplyr)
+require(multcomp)
+require(parallel)
+require(survey)
+require(energy)
+require(igraph)
+require(stringr)
+require(parallelDist)
+require(sva)
+require(mgcv)
+require(entropy)
 
 aal.homo.gr <- matrix(0, nrow=116, ncol=116)
 sdiag(aal.homo.gr, k=1) <- rep(c(1, 0), 116/2)[1:(116-1)]
@@ -117,7 +130,7 @@ compute_effect <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=100,
   } else {
     return(NULL)
   }
-  tryCatch({
+  normal.fn <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=100, mc.cores=1) {
     n.i <- length(cov.dat.i$id)
 
     test.uncor <- pdcor.test(D.i, as.numeric(cov.dat.i[[E1.name]]),
@@ -147,14 +160,17 @@ compute_effect <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=100,
                ps.mean + qnorm(.975)*sqrt(1/n.i*ps.var))
 
     result <- data.frame(Method="PDcor", Effect.Name=E1.name, Effect=test.uncor$estimate, Effect.lwr.jk=ci.jk[1], Effect.upr.jk=ci.jk[2],
-                      Effect.lwr.npboot=ci.npboot[1], Effect.upr.npboot=ci.npboot[2],
-                      p.value=test.uncor$p.value, Entropy=entropy(as.numeric(cov.dat.i[[E1.name]]), method="MM"), Variance=var(as.numeric(cov.dat.i[[E1.name]])),
-                      n=n.i, N=length(unique(cov.dat.i$Subid)))
-  }, error=function(e) {
+                         Effect.lwr.npboot=ci.npboot[1], Effect.upr.npboot=ci.npboot[2],
+                         p.value=test.uncor$p.value, Entropy=entropy(as.numeric(cov.dat.i[[E1.name]]), method="MM"), Variance=var(as.numeric(cov.dat.i[[E1.name]])),
+                         n=n.i, N=length(unique(cov.dat.i$Subid)))
+    return(result)
+  }
+  result <- tryCatch(normal.fn(D.i, cov.dat.i, E1.name, E2.name, R=R, nboots=nboots, mc.cores=mc.cores), error=function(e) {
     result <- data.frame(Method="PDcor", Effect.Name=E1.name, Effect=NA, Effect.lwr.jk=NA, Effect.upr.jk=NA,
                       Effect.lwr.npboot=NA, Effect.upr.npboot=NA, Effect.lwr.adjboot=NA, Effect.upr.adjboot=NA,
                       p.value=NA, Entropy=NA, Variance=NA,
                       n=n.i, N=length(unique(cov.dat.i$Subid)))
+    return(result)
   })
   result[[col.name]] <- col.id
   return(result)
