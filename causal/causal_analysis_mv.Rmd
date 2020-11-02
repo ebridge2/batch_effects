@@ -194,7 +194,8 @@ results$Covariate %>%
     geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
     scale_color_manual(values=c(">.05"="red", "<=.05"="darkgreen"), name="Test Outcome") +
     scale_y_continuous(labels=dset.ord$Dataset, breaks=dset.ord$id,
-                       limits=c(min(dset.ord$id) - .5, max(dset.ord$id) + .5), expand=c(0,0)) +
+                       limits=c(min(dset.ord$id) - .5, max(dset.ord$id) + .5), expand=c(0,0),
+                       name="Dataset") +
     theme_bw() +
     ggtitle("Forest Plot")
 ```
@@ -411,7 +412,8 @@ results$Covariate %>%
     geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
     scale_color_manual(values=c(">.05"="red", "<=.05"="darkgreen"), name="Test Outcome") +
     scale_y_continuous(labels=dset.ord$Dataset, breaks=dset.ord$id,
-                       limits=c(min(dset.ord$id) - .5, max(dset.ord$id) + .5), expand=c(0,0)) +
+                       limits=c(min(dset.ord$id) - .5, max(dset.ord$id) + .5), expand=c(0,0),
+                       name="Dataset") +
     theme_bw() +
     ggtitle("Forest Plot")
 ```
