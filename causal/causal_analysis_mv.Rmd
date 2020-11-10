@@ -46,11 +46,31 @@ continent <- c("IBATRT"="North America", "Utah1"="North America", "IPCAS_2"="Asi
                "MRN1"="North America", "BNU3"="Asia", "HNU1"="Asia", "SWU2"="Asia", "IPCAS_8"="Asia", "JHNU"="Asia", "IPCAS_6"="Asia",
                "BMB1"="Europe")
 results$Covariate$Continent <- continent[results$Covariate$Dataset]
+
 dset.ord <- results$Covariate %>%
-  select(Dataset, Continent, n) %>%
+  select(Dataset, Continent, n, N) %>%
   distinct() %>%
   arrange(Continent, n) %>%
-  mutate(id=row_number())
+  mutate(id=row_number()) %>%
+  mutate(Dataset.Newname=sub("_", "", Dataset))
+
+results$Site <- results$Site %>%
+  left_join(dset.ord %>% select(Dataset, Dataset.Newname), by=c("Dataset.Trt"="Dataset")) %>%
+  mutate(Dataset.Trt=Dataset.Newname) %>% select(-Dataset.Newname) %>%
+  left_join(dset.ord %>% select(Dataset, Dataset.Newname), by=c("Dataset.Ctrl"="Dataset")) %>%
+  mutate(Dataset.Ctrl=Dataset.Newname) %>% select(-Dataset.Newname)
+
+results$Covariate <- results$Covariate %>%
+  left_join(dset.ord %>% select(Dataset, Dataset.Newname), by=c("Dataset"="Dataset")) %>%
+  mutate(Dataset=factor(Dataset.Newname, levels=dset.ord$Dataset.Newname, ordered=TRUE)) %>% select(-Dataset.Newname)
+
+results$Signal <- results$Signal %>%
+  left_join(dset.ord %>% select(Dataset, Dataset.Newname), by=c("Dataset"="Dataset")) %>%
+  mutate(Dataset=factor(Dataset.Newname, levels=dset.ord$Dataset.Newname, ordered=TRUE)) %>% select(-Dataset.Newname)
+
+dset.ord <- dset.ord %>%
+  select(-Dataset) %>%
+  rename(Dataset=Dataset.Newname)
 ```
 
 ### Site Effects {.tabset}
@@ -58,95 +78,149 @@ dset.ord <- results$Covariate %>%
 ```{r}
 results$Site <- results$Site %>%
   ungroup() %>%
-  mutate(p.value=p.adjust(p.value, method="BH"))
+  mutate(p.value=p.adjust(p.value, method="BH"),
+         Dataset.Trt=factor(Dataset.Trt, 
+                            levels=(dset.ord %>% arrange(n, rev(as.character(Dataset))))$Dataset, 
+                            ordered=TRUE),
+         Dataset.Ctrl=factor(Dataset.Ctrl, 
+                             levels=(dset.ord %>% arrange(n, rev(as.character(Dataset))))$Dataset, 
+                             ordered=TRUE))
 ```
 
 ```{r}
-pval_hist_chart <- function(data, nbreaks=30, title="", y.scale=.03, text.y=.4, method="Raw") {
-  pval.breaks <- seq(0, 1, length.out=nbreaks)
+pval_hmap_chart <- function(data, title="", method="Raw", text.size=15, preproc=TRUE) {
+  if (!preproc) {
+    data <- data %>%
+      mutate(Data=recode_factor(Data, "Untrimmed"="Independence", "Trimmed"="Site Effect")) %>%
+      filter(Method == method) %>%
+      left_join((.) %>% filter(Data == "Site Effect") %>% 
+                  select(Dataset.Ctrl, Dataset.Trt, Method) %>% mutate(is.good=TRUE),
+                by=c("Dataset.Ctrl", "Dataset.Trt", "Method")) %>%
+      mutate(is.good=ifelse(is.na(is.good), FALSE, TRUE))
+  }
   data <- data %>%
-    mutate(Data=recode_factor(Data, "Untrimmed"="No Trimming")) %>%
-    filter(Method == method)
+    mutate(Dataset.tmp = Dataset.Trt,
+           Dataset.Trt=ifelse(Data == "Site Effect", Dataset.Ctrl, Dataset.Trt),
+           Dataset.Ctrl=ifelse(Data == "Site Effect", Dataset.tmp, Dataset.Ctrl))
+  data %>%
+    ggplot(aes(x=Dataset.Trt, y=Dataset.Ctrl, fill=Data, alpha=rev(p.value))) +
+    geom_tile() +
+    xlab("Treatment Dataset") +
+    ylab("Control Dataset") +
+    scale_alpha_continuous(trans="log10", name="p-value") +
+    scale_alpha_
+    scale_fill_gradient(low="#330066", high="#f2e5ff", trans="log10", limits=c(.001, 1), name="p-value") +
+    geom_tile(data=data %>% arrange(Data), aes(color=Data), width=.95, height=.95, size=.8) +
+    scale_color_manual(name="Estimated Effect", values=c("Independence"="red", "Site Effect"="green")) +
+    ggtitle(title) +
+    theme_bw() +
+    theme(text=element_text(size=text.size), axis.text.x=element_text(angle=90))
+}
+
+pval_hist_chart <- function(data, nbreaks=30, title="", y.scale=.03, text.y=.4, method="Raw",
+                            text.size=15, preproc=TRUE) {
+  if (!preproc) {
+    data <- data %>%
+      mutate(Data=recode_factor(Data, "Untrimmed"="Independence", "Trimmed"="Site Effect")) %>%
+      filter(Method == method) %>%
+      left_join((.) %>% filter(Data == "Site Effect") %>% 
+                  select(Dataset.Ctrl, Dataset.Trt, Method) %>% mutate(is.good=TRUE),
+                by=c("Dataset.Ctrl", "Dataset.Trt", "Method")) %>%
+      mutate(is.good=ifelse(is.na(is.good), FALSE, TRUE)) %>%
+      filter(!((Data == "Independence") & (is.good)))
+  }
+  pval.breaks <- seq(0, 1, length.out=nbreaks)
   
-  pdcorr.res <- data %>%
-    left_join(data %>% filter(Data == "Trimmed") %>% 
-                select(Dataset.Ctrl, Dataset.Trt, Method) %>% mutate(is.good=TRUE),
-              by=c("Dataset.Ctrl", "Dataset.Trt", "Method")) %>%
-    mutate(is.good=ifelse(is.na(is.good), "Independence Test",
-                          "Test of Site Effect"),
-           Data=factor(recode_factor(Data, "Raw"="No Trimming"), levels=c("No Trimming", "Trimmed"), ordered=TRUE)) %>%
-    filter(!((Data == "No Trimming") & (is.good == "Test of Site Effect")))
-  
-  sum.n <- pdcorr.res %>%
+  sum.n <- data %>%
     group_by(Data, Method, is.good) %>%
     summarize(count=n()) %>%
     mutate(text=sprintf("n=%d", count)) %>%
     ungroup() %>% distinct(is.good, .keep_all=TRUE) %>%
-    select(is.good, text)
+    select(Data, text)
   
-  rand.ord <- pdcorr.res
-  rand.ord <- rand.ord[sample(1:dim(pdcorr.res)[1], size=dim(pdcorr.res)[1], replace=FALSE),]
-  
-  plt <- pdcorr.res %>%
+  data.rand <- data %>% sample_n(nrow(.))
+  plt <- data %>%
     arrange(Data) %>%
-    filter(!(Data == "No Trimming" & is.good=="Test of Site Effect")) %>%
     ggplot() +
       geom_histogram(aes(p.value, color=Data, fill=Data,
                          group=paste0(Data, Method, is.good),
                          y=..count../tapply(..count.., ..group.., sum)[..group..]),
                      alpha=.5, position="dodge") +
-      geom_jitter(data=rand.ord %>% filter(!(Data == "No Trimming" & is.good=="Test of Site Effect")), 
+      geom_jitter(data=data.rand, 
                   aes(p.value, group=paste0(Data, Method, is.good), y=-3/2*y.scale, fill=Data,
-                      color=Data), width=0,  height=y.scale, size=.5) +
-      facet_grid(".~is.good") +
-      geom_text(data=data.frame(x=.05, y=text.y/2, text="$\\alpha$=.05"),
+                      color=Data), width=10*ggplot2:::resolution(log10(data.rand$p.value), FALSE),
+                  height=y.scale, size=.02) +
+      facet_grid(".~Data") +
+      geom_text(data=data.frame(x=.05, y=text.y/2, Data="Independence", text="$\\alpha$=.05"),
               aes(x=x, y=y, label=TeX(text, output="character")), 
-              nudge_x=.15, color='black', parse=TRUE) +
-      geom_text(data=sum.n, aes(x=1, y=text.y, label=text), color='black', nudge_x=-.1) +
-      scale_fill_manual(values=c("No Trimming"="red", "Trimmed"="darkgreen")) +
-      scale_color_manual(values=c("No Trimming"="red", "Trimmed"="darkgreen")) +
-      scale_x_continuous(expand=c(0, 0), limits=c(-.03, 1.03)) +
-      scale_y_continuous(expand=c(0, 0.03), limits=c(-5/2*y.scale, NA)) +
+              nudge_x=.2, color='black', parse=TRUE) +
+      geom_text(data=sum.n, aes(x=1, y=text.y, label=text), color='black', nudge_x=-.15) +
+      scale_fill_manual(values=c("Independence"="red", "Site Effect"="darkgreen")) +
+      scale_color_manual(values=c("Independence"="red", "Site Effect"="darkgreen")) +
+      scale_x_continuous(expand=c(0, 0), limits=c(.009, 1), breaks=c(.01, .1, 1), trans="log10") +
+      scale_y_continuous(expand=c(0, 0.03), limits=c(-.25, 1), breaks=c(0, .5, 1)) +
       xlab("p-value") +
       ylab("Fraction of p-values") +
       ggtitle(title) +
       theme_bw() +
+      theme(text=element_text(size=text.size)) +
       geom_vline(xintercept = .05, linetype="dashed") +
       guides(fill=FALSE, shape=FALSE, color=FALSE)
   return(as.ggplot(gtable_filter(ggplotGrob(plt), "axis-b-2", trim=FALSE, invert=TRUE)))
 }
+
+compare_site <- function(data, method="Raw", nbreaks=30, text.y=.4, y.scale=.03, title.hmap="",
+                         title.hist="", text.size=15) {
+  data <- data %>%
+    mutate(Data=recode_factor(Data, "Untrimmed"="Independence", "Trimmed"="Site Effect")) %>%
+    filter(Method == method) %>%
+    left_join((.) %>% filter(Data == "Site Effect") %>% 
+                select(Dataset.Ctrl, Dataset.Trt, Method) %>% mutate(is.good=TRUE),
+              by=c("Dataset.Ctrl", "Dataset.Trt", "Method")) %>%
+    mutate(is.good=ifelse(is.na(is.good), FALSE, TRUE)) %>%
+    filter(!((Data == "Independence") & (is.good)))
+  
+  p.hmap <- pval_hmap_chart(data, method=method, title=title.hmap, text.size=text.size)
+  p.hist <- pval_hist_chart(data, method=method, nbreaks=nbreaks, title=title.hist,
+                            y.scale=y.scale, text.y=text.y, text.size=text.size)
+  arrangeGrob(p.hmap, p.hist, heights=c(.7, .3), nrow=2)
+}
+```
+
+```{r, warning=FALSE, message=FALSE}
+params <- list(Raw=list(method="Raw", title.hmap="Detectability of Site Effect Before Site Correction"),
+               ComBat=list(method="ComBat", title.hmap="Detectability of Site Effect After ComBat"),
+               Ranked=list(method="Ranked", title.hmap="Detetectability of Site Effect After Ranking"),
+               ZScore=list(method="Z-Score", title.hmap="Detectability of Site Effect After Z-Scoring"))
+
+plts <- lapply(params, function(param) {
+  compare_site(results$Site, method=param$method, text.y=.8, y.scale=.1, title.hmap=param$title.hmap)
+})
+names(plts) <- names(plts)
 ```
 
 #### Raw
 
-```{r, fig.height=3, fig.width=7, warning=FALSE, message=FALSE}
-plt <- pval_hist_chart(results$Site, method="Raw", text.y=.8, y.scale=.05,
-                       title="Detectability of Site-Effect Before Site Correction")
-plot(plt)
+```{r, fig.height=9, fig.width=8, warning=FALSE, message=FALSE}
+plot(plts$Raw)
 ```
 
 #### ComBat
 
-```{r, fig.height=3, fig.width=7, warning=FALSE, message=FALSE}
-plt <- pval_hist_chart(results$Site, method="ComBat", text.y=.8, y.scale=.05, 
-                       title="Detectability of Site-Effect After ComBat")
-plot(plt)
+```{r, fig.height=9, fig.width=8, warning=FALSE, message=FALSE}
+plot(plts$ComBat)
 ```
 
 #### Ranked
 
-```{r, fig.height=3, fig.width=7, warning=FALSE, message=FALSE}
-plt <- pval_hist_chart(results$Site, method="Ranked", text.y=.8, y.scale=.05,
-                       title="Detectability of Site-Effect After Ranking")
-plot(plt)
+```{r, fig.height=9, fig.width=8, warning=FALSE, message=FALSE}
+plot(plts$Ranked)
 ```
 
 #### Z-Score
 
-```{r, fig.height=3, fig.width=7, warning=FALSE, message=FALSE}
-plt <- pval_hist_chart(results$Site, method="Z-Score", text.y=.8, y.scale=.05, 
-                       title="Detectability of Site-Effect After Z-Scoring")
-plot(plt)
+```{r, fig.height=9, fig.width=8, warning=FALSE, message=FALSE}
+plot(plts$ZScore)
 ```
 
 ### Between-Individual Covariate Effects
@@ -182,22 +256,46 @@ tab.cov %>%
 #### Forest Plot
 
 ```{r, fig.height=8, fig.width=6}
-results$Covariate %>%
-  mutate(Significant=ifelse(p.value <= .05, "<=.05", ">.05"),
-         Method=factor(Method, levels=c("Raw", "ComBat", "Ranked", "Z-Score"), ordered=TRUE),
+plt.forest <- results$Covariate %>%
+  filter(Method %in% c("Raw", "ComBat")) %>%
+  mutate(Significant=ifelse(p.value <= .05, "Yes", "No"),
+         Method=factor(Method, levels=c("Raw", "ComBat"), ordered=TRUE),#, "Ranked", "Z-Score"), ordered=TRUE),
          Dataset=factor(Dataset, levels=dset.ord$Dataset, ordered=TRUE),
-         ypos= (as.numeric(Dataset) + (as.numeric(Method) - 2)/6)) %>%
+         ypos= (as.numeric(Dataset) + (as.numeric(Method) - 1.5)/2)) %>%
   ggplot(aes(x=Effect, shape=Method, xmin=Effect.lwr.jk, xmax=Effect.upr.jk, y=ypos, 
              color=Significant)) +
     geom_pointrange() +
     facet_grid(".~Effect.Name") +
     geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
-    scale_color_manual(values=c(">.05"="red", "<=.05"="darkgreen"), name="Test Outcome") +
+    scale_color_manual(values=c("No"="red", "Yes"="darkgreen"), name="Reject Null") +
     scale_y_continuous(labels=dset.ord$Dataset, breaks=dset.ord$id,
                        limits=c(min(dset.ord$id) - .5, max(dset.ord$id) + .5), expand=c(0,0),
                        name="Dataset") +
     theme_bw() +
-    ggtitle("Forest Plot")
+    ggtitle("(A) Forest Plot of Demographic Effects") +
+    theme(text=element_text(size=15))
+plot(plt.forest)
+```
+
+```{r}
+tab.plt <- tab.cov %>%
+  pivot_longer("Sex":"Age", names_to="Demographic", values_to="Value") %>%
+  ggplot(aes(x=Demographic, y=Method)) +
+  geom_tile(fill="white") +
+  geom_text(aes(label=Value), size=5) +
+  facet_grid("Method~Demographic", scales="free", switch="y") +
+  scale_x_discrete(expand=c(0,0), breaks=NaN, position="top", name="Demographic Characteristic") +
+  scale_y_discrete(expand=c(0,0), breaks=NaN, name="Normalization Strategy") +
+  theme_bw() +
+  ggtitle("(B) Fraction of Within-Site Demographic Effects Detected") +
+  theme(text=element_text(size=15), panel.spacing=unit(0, "lines"),
+        strip.text.y.left=element_text(angle=0))
+
+plot(tab.plt)
+```
+
+```{r, fig.height=10, fig.width=8}
+grid.arrange(plt.forest, tab.plt, heights=c(.7, .3))
 ```
 
 #### Effects WRT Variability in the Data {.tabset}
@@ -241,13 +339,15 @@ plt <- results$Signal %>%
     facet_grid(". ~ Measure") +
     scale_color_manual(values = c("Raw"="green", "ComBat"="darkgreen", "Z-Score"="red", "Ranked"="darkred")) +
     xlab("p-value") +
+    scale_x_continuous() +
     ylab("ecdf of p-values") +
     geom_vline(xintercept = .05, linetype='dashed') +
     theme_bw() +
-    ggtitle("Preservation of Signal Effect by Correction Technique") +
-    geom_text(data=data.frame(x=.05, y=.8, text="$\\alpha$=.05"),
+    ggtitle("Preservation of Signal Effect by Normalization Technique") +
+    geom_text(data=data.frame(x=.05, y=.8,Measure="Homophilic Difference", text="$\\alpha$=.05"),
             aes(x=x, y=y, label=TeX(text, output="character")), 
-            nudge_x=.2, color='black', parse=TRUE)
+            nudge_x=.2, color='black', parse=TRUE) +
+    theme(text=element_text(size=15))
 as.ggplot(gtable_filter(ggplotGrob(plt), "axis-b-2", trim=FALSE, invert=TRUE))
 ```
 
@@ -264,11 +364,31 @@ continent <- c("IBATRT"="North America", "Utah1"="North America", "IPCAS_2"="Asi
                "MRN1"="North America", "BNU3"="Asia", "HNU1"="Asia", "SWU2"="Asia", "IPCAS_8"="Asia", "JHNU"="Asia", "IPCAS_6"="Asia",
                "BMB1"="Europe")
 results$Covariate$Continent <- continent[results$Covariate$Dataset]
+
 dset.ord <- results$Covariate %>%
-  select(Dataset, Continent, n) %>%
+  select(Dataset, Continent, n, N) %>%
   distinct() %>%
   arrange(Continent, n) %>%
-  mutate(id=row_number())
+  mutate(id=row_number()) %>%
+  mutate(Dataset.Newname=sub("_", "", Dataset))
+
+results$Site <- results$Site %>%
+  left_join(dset.ord %>% select(Dataset, Dataset.Newname), by=c("Dataset.Trt"="Dataset")) %>%
+  mutate(Dataset.Trt=Dataset.Newname) %>% select(-Dataset.Newname) %>%
+  left_join(dset.ord %>% select(Dataset, Dataset.Newname), by=c("Dataset.Ctrl"="Dataset")) %>%
+  mutate(Dataset.Ctrl=Dataset.Newname) %>% select(-Dataset.Newname)
+
+results$Covariate <- results$Covariate %>%
+  left_join(dset.ord %>% select(Dataset, Dataset.Newname), by=c("Dataset"="Dataset")) %>%
+  mutate(Dataset=factor(Dataset.Newname, levels=dset.ord$Dataset.Newname, ordered=TRUE)) %>% select(-Dataset.Newname)
+
+results$Signal <- results$Signal %>%
+  left_join(dset.ord %>% select(Dataset, Dataset.Newname), by=c("Dataset"="Dataset")) %>%
+  mutate(Dataset=factor(Dataset.Newname, levels=dset.ord$Dataset.Newname, ordered=TRUE)) %>% select(-Dataset.Newname)
+
+dset.ord <- dset.ord %>%
+  select(-Dataset) %>%
+  rename(Dataset=Dataset.Newname)
 ```
 
 ### Site Effects {.tabset}
@@ -276,95 +396,50 @@ dset.ord <- results$Covariate %>%
 ```{r}
 results$Site <- results$Site %>%
   ungroup() %>%
-  mutate(p.value=p.adjust(p.value, method="BH"))
+  mutate(p.value=p.adjust(p.value, method="BH"),
+         Dataset.Trt=factor(Dataset.Trt, 
+                            levels=(dset.ord %>% arrange(n, rev(as.character(Dataset))))$Dataset, 
+                            ordered=TRUE),
+         Dataset.Ctrl=factor(Dataset.Ctrl, 
+                             levels=(dset.ord %>% arrange(n, rev(as.character(Dataset))))$Dataset, 
+                             ordered=TRUE))
 ```
 
-```{r}
-pval_hist_chart <- function(data, nbreaks=30, title="", y.scale=.03, text.y=.4, method="Raw") {
-  pval.breaks <- seq(0, 1, length.out=nbreaks)
-  data <- data %>%
-    mutate(Data=recode_factor(Data, "Untrimmed"="No Trimming")) %>%
-    filter(Method == method)
-  
-  pdcorr.res <- data %>%
-    left_join(data %>% filter(Data == "Trimmed") %>% 
-                select(Dataset.Ctrl, Dataset.Trt, Method) %>% mutate(is.good=TRUE),
-              by=c("Dataset.Ctrl", "Dataset.Trt", "Method")) %>%
-    mutate(is.good=ifelse(is.na(is.good), "Independence Test",
-                          "Test of Site Effect"),
-           Data=factor(recode_factor(Data, "Raw"="No Trimming"), levels=c("No Trimming", "Trimmed"), ordered=TRUE)) %>%
-    filter(!((Data == "No Trimming") & (is.good == "Test of Site Effect")))
-  
-  sum.n <- pdcorr.res %>%
-    group_by(Data, Method, is.good) %>%
-    summarize(count=n()) %>%
-    mutate(text=sprintf("n=%d", count)) %>%
-    ungroup() %>% distinct(is.good, .keep_all=TRUE) %>%
-    select(is.good, text)
-  
-  rand.ord <- pdcorr.res
-  rand.ord <- rand.ord[sample(1:dim(pdcorr.res)[1], size=dim(pdcorr.res)[1], replace=FALSE),]
-  
-  plt <- pdcorr.res %>%
-    arrange(Data) %>%
-    filter(!(Data == "No Trimming" & is.good=="Test of Site Effect")) %>%
-    ggplot() +
-      geom_histogram(aes(p.value, color=Data, fill=Data,
-                         group=paste0(Data, Method, is.good),
-                         y=..count../tapply(..count.., ..group.., sum)[..group..]),
-                     alpha=.5, position="dodge") +
-      geom_jitter(data=rand.ord %>% filter(!(Data == "No Trimming" & is.good=="Test of Site Effect")), 
-                  aes(p.value, group=paste0(Data, Method, is.good), y=-3/2*y.scale, fill=Data,
-                      color=Data), width=0,  height=y.scale, size=.5) +
-      facet_grid(".~is.good") +
-      geom_text(data=data.frame(x=.05, y=text.y/2, text="$\\alpha$=.05"),
-              aes(x=x, y=y, label=TeX(text, output="character")), 
-              nudge_x=.15, color='black', parse=TRUE) +
-      geom_text(data=sum.n, aes(x=1, y=text.y, label=text), color='black', nudge_x=-.1) +
-      scale_fill_manual(values=c("No Trimming"="red", "Trimmed"="darkgreen")) +
-      scale_color_manual(values=c("No Trimming"="red", "Trimmed"="darkgreen")) +
-      scale_x_continuous(expand=c(0, 0), limits=c(-.03, 1.03)) +
-      scale_y_continuous(expand=c(0, 0.03), limits=c(-5/2*y.scale, NA)) +
-      xlab("p-value") +
-      ylab("Fraction of p-values") +
-      ggtitle(title) +
-      theme_bw() +
-      geom_vline(xintercept = .05, linetype="dashed") +
-      guides(fill=FALSE, shape=FALSE, color=FALSE)
-  return(as.ggplot(gtable_filter(ggplotGrob(plt), "axis-b-2", trim=FALSE, invert=TRUE)))
-}
+```{r, warning=FALSE, message=FALSE}
+params <- list(Raw=list(method="Raw", title.hmap="Detectability of Site Effect Before Site Correction"),
+               ComBat=list(method="ComBat", title.hmap="Detectability of Site Effect After ComBat"),
+               Ranked=list(method="Ranked", title.hmap="Detetectability of Site Effect After Ranking"),
+               ZScore=list(method="Z-Score", title.hmap="Detectability of Site Effect After Z-Scoring"))
+
+plts <- lapply(params, function(param) {
+  pval_hmap_chart(results$Site, method=param$method, title=param$title.hmap, preproc=FALSE)
+})
+names(plts) <- names(plts)
 ```
 
 #### Raw
 
-```{r, fig.height=3, fig.width=7, warning=FALSE, message=FALSE}
-plt <- pval_hist_chart(results$Site, method="Raw", text.y=.8, y.scale=.05,
-                       title="Detectability of Site-Effect Before Site Correction")
-plot(plt)
+```{r, fig.height=5, fig.width=7, warning=FALSE, message=FALSE}
+plot(plts$Raw)
 ```
+
 
 #### ComBat
 
-```{r, fig.height=3, fig.width=7, warning=FALSE, message=FALSE}
-plt <- pval_hist_chart(results$Site, method="ComBat", text.y=.8, y.scale=.03, 
-                       title="Detectability of Site-Effect After ComBat")
-plot(plt)
+```{r, fig.height=5, fig.width=7, warning=FALSE, message=FALSE}
+plot(plts$ComBat)
 ```
 
 #### Ranked
 
-```{r, fig.height=3, fig.width=7, warning=FALSE, message=FALSE}
-plt <- pval_hist_chart(results$Site, method="Ranked", text.y=.8, y.scale=.03, 
-                       title="Detectability of Site-Effect After Ranking")
-plot(plt)
+```{r, fig.height=5, fig.width=7, warning=FALSE, message=FALSE}
+plot(plts$Ranked)
 ```
 
 #### Z-Score
 
-```{r, fig.height=3, fig.width=7, warning=FALSE, message=FALSE}
-plt <- pval_hist_chart(results$Site, method="Z-Score", text.y=.8, y.scale=.03, 
-                       title="Detectability of Site-Effect After Z-Scoring")
-plot(plt)
+```{r, fig.height=5, fig.width=7, warning=FALSE, message=FALSE}
+plot(plts$ZScore)
 ```
 
 ### Between-Individual Covariate Effects {.tabset}
@@ -401,7 +476,7 @@ tab.cov %>%
 
 ```{r, fig.height=8, fig.width=6}
 results$Covariate %>%
-  mutate(Significant=ifelse(p.value <= .05, "<=.05", ">.05"),
+  mutate(Significant=ifelse(p.value <= .05, "Yes", "No"),
          Method=factor(Method, levels=c("Raw", "ComBat", "Ranked", "Z-Score"), ordered=TRUE),
          Dataset=factor(Dataset, levels=dset.ord$Dataset, ordered=TRUE),
          ypos= (as.numeric(Dataset) + (as.numeric(Method) - 2)/6)) %>%
@@ -410,7 +485,7 @@ results$Covariate %>%
     geom_pointrange() +
     facet_grid(".~Effect.Name") +
     geom_vline(aes(xintercept=0), color="black", linetype="dashed") +
-    scale_color_manual(values=c(">.05"="red", "<=.05"="darkgreen"), name="Test Outcome") +
+    scale_color_manual(values=c("No"="red", "Yes"="darkgreen"), name="Significant") +
     scale_y_continuous(labels=dset.ord$Dataset, breaks=dset.ord$id,
                        limits=c(min(dset.ord$id) - .5, max(dset.ord$id) + .5), expand=c(0,0),
                        name="Dataset") +
@@ -464,7 +539,7 @@ plt <- results$Signal %>%
     geom_vline(xintercept = .05, linetype='dashed') +
     theme_bw() +
     ggtitle("Preservation of Signal Effect by Correction Technique") +
-    geom_text(data=data.frame(x=.05, y=.8, text="$\\alpha$=.05"),
+    geom_text(data=data.frame(x=.05, y=.8,Measure="Homophilic Difference", text="$\\alpha$=.05"),
             aes(x=x, y=y, label=TeX(text, output="character")), 
             nudge_x=.2, color='black', parse=TRUE)
 as.ggplot(gtable_filter(ggplotGrob(plt), "axis-b-2", trim=FALSE, invert=TRUE))
