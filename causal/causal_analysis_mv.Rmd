@@ -88,6 +88,14 @@ results$Site <- results$Site %>%
 ```
 
 ```{r}
+reverselog_trans <- function(base = exp(1)) {
+    trans <- function(x) -log(x, base)
+    inv <- function(x) base^(-x)
+    trans_new(paste0("reverselog-", format(base)), trans, inv, 
+              log_breaks(base = base), 
+              domain = c(1e-100, Inf))
+}
+
 pval_hmap_chart <- function(data, title="", method="Raw", text.size=15, preproc=TRUE) {
   if (!preproc) {
     data <- data %>%
@@ -99,23 +107,29 @@ pval_hmap_chart <- function(data, title="", method="Raw", text.size=15, preproc=
       mutate(is.good=ifelse(is.na(is.good), FALSE, TRUE))
   }
   data <- data %>%
-    mutate(Dataset.tmp = Dataset.Trt,
-           Dataset.Trt=ifelse(Data == "Site Effect", Dataset.Ctrl, Dataset.Trt),
-           Dataset.Ctrl=ifelse(Data == "Site Effect", Dataset.tmp, Dataset.Ctrl))
+    mutate(Dataset.tmp = as.character(Dataset.Trt),
+           Dataset.Trt=ifelse(Data == "Site Effect", as.character(Dataset.Ctrl), as.character(Dataset.Trt)),
+           Dataset.Ctrl=ifelse(Data == "Site Effect", as.character(Dataset.tmp), as.character(Dataset.Ctrl)),
+           Dataset.Trt=factor(Dataset.Trt, 
+                              levels=(dset.ord %>% arrange(n, rev(as.character(Dataset))))$Dataset, 
+                              ordered=TRUE),
+           Dataset.Ctrl=factor(Dataset.Ctrl, 
+                               levels=(dset.ord %>% arrange(n, rev(as.character(Dataset))))$Dataset, 
+                               ordered=TRUE)) %>%
+    select(-Dataset.tmp)
   data %>%
-    ggplot(aes(x=Dataset.Trt, y=Dataset.Ctrl, fill=Data, alpha=rev(p.value))) +
+    ggplot(aes(x=Dataset.Trt, y=Dataset.Ctrl, fill=Data, alpha=p.value)) +
     geom_tile() +
     xlab("Treatment Dataset") +
     ylab("Control Dataset") +
-    scale_alpha_continuous(trans="log10", name="p-value") +
-    scale_alpha_
-    scale_fill_gradient(low="#330066", high="#f2e5ff", trans="log10", limits=c(.001, 1), name="p-value") +
-    geom_tile(data=data %>% arrange(Data), aes(color=Data), width=.95, height=.95, size=.8) +
+    scale_alpha_continuous(trans=reverselog_trans(10), limits=c(1, .009), breaks=c(.01, .1, 1), name="p-value") +
+    scale_fill_manual(values=c("Site Effect"="dark green", "Independence"="red")) +
     scale_color_manual(name="Estimated Effect", values=c("Independence"="red", "Site Effect"="green")) +
     ggtitle(title) +
     theme_bw() +
     theme(text=element_text(size=text.size), axis.text.x=element_text(angle=90))
 }
+
 
 pval_hist_chart <- function(data, nbreaks=30, title="", y.scale=.03, text.y=.4, method="Raw",
                             text.size=15, preproc=TRUE) {
