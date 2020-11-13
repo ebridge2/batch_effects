@@ -54,7 +54,7 @@ compute_propensities <- function(df, form="Treatment ~ Sex + Age + Continent", t
   return(df)
 }
 
-causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=500, mc.cores=1) {
+causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
   datasets <- sort(unique((cov.dat %>% dplyr::select(Dataset))$Dataset))
   dset.pairs <- combn(datasets, 2)
   result <- do.call(rbind, mclapply(1:dim(dset.pairs)[2], function(x) {
@@ -130,21 +130,21 @@ compute_effect <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=100,
   } else {
     return(NULL)
   }
-  normal.fn <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=100, mc.cores=1) {
+  normal.fn <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=1000, mc.cores=1) {
     n.i <- length(cov.dat.i$id)
 
     test.uncor <- pdcor.test(D.i, as.numeric(cov.dat.i[[E1.name]]),
                              as.numeric(cov.dat.i[[E2.name]]), R=R)
     ## Bootstrapped CIs
-    bootstr.ci <- simplify2array(mclapply(1:nboots, function(i) {
-      ids <- sample(1:n.i, size=n.i, replace = TRUE)
-      cov.dat.boot <- cov.dat.i[ids,]
-      Dmtx.dat.boot <- as.dist(as.matrix(D.i)[ids, ids])
-      test.boot <- pdcor(Dmtx.dat.boot, as.numeric(cov.dat.boot[[E1.name]]),
-                         as.numeric(cov.dat.boot[[E2.name]]))
-      return(test.boot)
-    }, mc.cores=mc.cores))
-    ci.npboot <- quantile(bootstr.ci, c(.025, .975))
+    # bootstr.ci <- simplify2array(mclapply(1:nboots, function(i) {
+    #   ids <- sample(1:n.i, size=n.i, replace = TRUE)
+    #   cov.dat.boot <- cov.dat.i[ids,]
+    #   Dmtx.dat.boot <- as.dist(as.matrix(D.i)[ids, ids])
+    #   test.boot <- pdcor(Dmtx.dat.boot, as.numeric(cov.dat.boot[[E1.name]]),
+    #                      as.numeric(cov.dat.boot[[E2.name]]))
+    #   return(test.boot)
+    # }, mc.cores=mc.cores))
+    # ci.npboot <- quantile(bootstr.ci, c(.025, .975))
 
     jk.stat <- simplify2array(mclapply(1:n.i, function(i) {
       ids <- (1:n.i)[-i]
@@ -160,7 +160,7 @@ compute_effect <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=100,
                ps.mean + qnorm(.975)*sqrt(1/n.i*ps.var))
 
     result <- data.frame(Method="PDcor", Effect.Name=E1.name, Effect=test.uncor$estimate, Effect.lwr.jk=ci.jk[1], Effect.upr.jk=ci.jk[2],
-                         Effect.lwr.npboot=ci.npboot[1], Effect.upr.npboot=ci.npboot[2],
+                         # Effect.lwr.npboot=ci.npboot[1], Effect.upr.npboot=ci.npboot[2],
                          p.value=test.uncor$p.value, Entropy=entropy(as.numeric(cov.dat.i[[E1.name]]), method="MM"), Variance=var(as.numeric(cov.dat.i[[E1.name]])),
                          n=n.i, N=length(unique(cov.dat.i$Subid)))
     return(result)
@@ -215,7 +215,7 @@ causal_ana_cov <- function(Dmtx.dat, cov.dat, nboots=100, R=1000, mc.cores=1) {
   return(rbind(result.sex, result.age))
 }
 
-causal_ana_cov_cont <- function(Dmtx.dat, cov.dat, nboots=100, R=1000, mc.cores=1) {
+causal_ana_cov_cont <- function(Dmtx.dat, cov.dat, nboots=1000, R=1000, mc.cores=1) {
   cov.dat <- cov.dat %>%
     ungroup() %>%
     mutate(id=row_number())

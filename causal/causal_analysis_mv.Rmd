@@ -123,16 +123,17 @@ pval_hmap_chart <- function(data, title="", method="Raw", text.size=15, preproc=
     xlab("Treatment Dataset") +
     ylab("Control Dataset") +
     scale_alpha_continuous(trans=reverselog_trans(10), limits=c(1, .009), breaks=c(.01, .1, 1), name="p-value") +
-    scale_fill_manual(values=c("Site Effect"="dark green", "Independence"="red")) +
-    scale_color_manual(name="Estimated Effect", values=c("Independence"="red", "Site Effect"="green")) +
+    scale_fill_manual(values=c("Site Effect"="dark green", "Independence"="red"), name="Estimated Effect") +
     ggtitle(title) +
     theme_bw() +
-    theme(text=element_text(size=text.size), axis.text.x=element_text(angle=90))
+    theme(text=element_text(size=text.size), axis.text.x=element_text(angle=90),
+          panel.grid.major=element_blank(),
+          panel.grid.minor = element_blank())
 }
 
 
 pval_hist_chart <- function(data, nbreaks=30, title="", y.scale=.03, text.y=.4, method="Raw",
-                            text.size=15, preproc=TRUE) {
+                            text.size=15, preproc=TRUE, p.adjust=.0005) {
   if (!preproc) {
     data <- data %>%
       mutate(Data=recode_factor(Data, "Untrimmed"="Independence", "Trimmed"="Site Effect")) %>%
@@ -140,16 +141,15 @@ pval_hist_chart <- function(data, nbreaks=30, title="", y.scale=.03, text.y=.4, 
       left_join((.) %>% filter(Data == "Site Effect") %>% 
                   select(Dataset.Ctrl, Dataset.Trt, Method) %>% mutate(is.good=TRUE),
                 by=c("Dataset.Ctrl", "Dataset.Trt", "Method")) %>%
-      mutate(is.good=ifelse(is.na(is.good), FALSE, TRUE)) %>%
-      filter(!((Data == "Independence") & (is.good)))
+      mutate(is.good=ifelse(is.na(is.good), FALSE, TRUE))
   }
   pval.breaks <- seq(0, 1, length.out=nbreaks)
   
   sum.n <- data %>%
-    group_by(Data, Method, is.good) %>%
+    group_by(Data, Method) %>%
     summarize(count=n()) %>%
     mutate(text=sprintf("n=%d", count)) %>%
-    ungroup() %>% distinct(is.good, .keep_all=TRUE) %>%
+    ungroup() %>%
     select(Data, text)
   
   data.rand <- data %>% sample_n(nrow(.))
@@ -157,19 +157,19 @@ pval_hist_chart <- function(data, nbreaks=30, title="", y.scale=.03, text.y=.4, 
     arrange(Data) %>%
     ggplot() +
       geom_histogram(aes(p.value, color=Data, fill=Data,
-                         group=paste0(Data, Method, is.good),
+                         group=paste0(Data, Method),
                          y=..count../tapply(..count.., ..group.., sum)[..group..]),
                      alpha=.5, position="dodge") +
       geom_jitter(data=data.rand, 
-                  aes(p.value, group=paste0(Data, Method, is.good), y=-3/2*y.scale, fill=Data,
-                      color=Data), width=10*ggplot2:::resolution(log10(data.rand$p.value), FALSE),
+                  aes(p.value+p.adjust, group=paste0(Data, Method), y=-3/2*y.scale, fill=Data,
+                      color=Data), width=30*ggplot2:::resolution(log10(data.rand$p.value), FALSE),
                   height=y.scale, size=.02) +
       facet_grid(".~Data") +
       geom_text(data=data.frame(x=.05, y=text.y/2, Data="Independence", text="$\\alpha$=.05"),
               aes(x=x, y=y, label=TeX(text, output="character")), 
               nudge_x=.2, color='black', parse=TRUE) +
       geom_text(data=sum.n, aes(x=1, y=text.y, label=text), color='black', nudge_x=-.15) +
-      scale_fill_manual(values=c("Independence"="red", "Site Effect"="darkgreen")) +
+      scale_fill_manual(values=c("Independence"="red", "Site Effect"="darkgreen"), name="Estimated Effect") +
       scale_color_manual(values=c("Independence"="red", "Site Effect"="darkgreen")) +
       scale_x_continuous(expand=c(0, 0), limits=c(.009, 1), breaks=c(.01, .1, 1), trans="log10") +
       scale_y_continuous(expand=c(0, 0.03), limits=c(-.25, 1), breaks=c(0, .5, 1)) +
@@ -184,31 +184,30 @@ pval_hist_chart <- function(data, nbreaks=30, title="", y.scale=.03, text.y=.4, 
 }
 
 compare_site <- function(data, method="Raw", nbreaks=30, text.y=.4, y.scale=.03, title.hmap="",
-                         title.hist="", text.size=15) {
+                         title.hist="", text.size=15, p.adjust=0) {
   data <- data %>%
     mutate(Data=recode_factor(Data, "Untrimmed"="Independence", "Trimmed"="Site Effect")) %>%
     filter(Method == method) %>%
     left_join((.) %>% filter(Data == "Site Effect") %>% 
                 select(Dataset.Ctrl, Dataset.Trt, Method) %>% mutate(is.good=TRUE),
               by=c("Dataset.Ctrl", "Dataset.Trt", "Method")) %>%
-    mutate(is.good=ifelse(is.na(is.good), FALSE, TRUE)) %>%
-    filter(!((Data == "Independence") & (is.good)))
+    mutate(is.good=ifelse(is.na(is.good), FALSE, TRUE))
   
   p.hmap <- pval_hmap_chart(data, method=method, title=title.hmap, text.size=text.size)
   p.hist <- pval_hist_chart(data, method=method, nbreaks=nbreaks, title=title.hist,
-                            y.scale=y.scale, text.y=text.y, text.size=text.size)
+                            y.scale=y.scale, text.y=text.y, text.size=text.size, p.adjust=p.adjust)
   arrangeGrob(p.hmap, p.hist, heights=c(.7, .3), nrow=2)
 }
 ```
 
 ```{r, warning=FALSE, message=FALSE}
-params <- list(Raw=list(method="Raw", title.hmap="Detectability of Site Effect Before Site Correction"),
-               ComBat=list(method="ComBat", title.hmap="Detectability of Site Effect After ComBat"),
-               Ranked=list(method="Ranked", title.hmap="Detetectability of Site Effect After Ranking"),
-               ZScore=list(method="Z-Score", title.hmap="Detectability of Site Effect After Z-Scoring"))
+params <- list(Raw=list(method="Raw", title.hmap="Detectability of Site-Related Effect Before Site Correction", p.adjust=.0005),
+               ComBat=list(method="ComBat", title.hmap="Detectability of Site-Related Effect After ComBat", p.adjust=0),
+               Ranked=list(method="Ranked", title.hmap="Detetectability of Site-Related Effect After Ranking", p.adjust=0),
+               ZScore=list(method="Z-Score", title.hmap="Detectability of Site-Related Effect After Z-Scoring", p.adjust=0))
 
 plts <- lapply(params, function(param) {
-  compare_site(results$Site, method=param$method, text.y=.8, y.scale=.1, title.hmap=param$title.hmap)
+  compare_site(results$Site, method=param$method, text.y=.8, y.scale=.1, title.hmap=param$title.hmap, p.adjust=param$p.adjust)
 })
 names(plts) <- names(plts)
 ```
