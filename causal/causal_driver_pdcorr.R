@@ -37,9 +37,10 @@ list2array <- function(x) {
   x <- x[good.ids]
   return(list(good.ids=good.ids, result=t(simplify2array(x))))
 }
-gr.out <- list2array(mclapply(gr.names, function(name) {
+
+read.gr <- function(name, mri.path='', format='ncol') {
   tryCatch({
-    g <- igraph::read_graph(file.path(mri.path, name), format=fmt)
+    g <- igraph::read_graph(file.path(mri.path, name), format=format)
     V.incl <- as.numeric(V(g)$name)
     V.notincl <- (1:116)[!sapply(1:116, function(i) i %in% V.incl)]
     if (length(V.notincl) > 0) {
@@ -52,6 +53,9 @@ gr.out <- list2array(mclapply(gr.names, function(name) {
   }, error=function(e) {
     return(NULL)
   })
+}
+gr.out <- list2array(mclapply(gr.names, function(name) {
+  read.gr(name,  mri.path=mri.path, format=fmt)
 }, mc.cores=ncores))
 gr.dat <- gr.out$result; good.ids <- gr.out$good.ids
 
