@@ -92,6 +92,9 @@ continent <- c("IBATRT"="North America", "Utah1"="North America", "IPCAS_2"="Asi
                "BMB1"="Europe")
 cov.dat$Continent <- as.character(continent[as.character(cov.dat$Dataset)])
 
+cov.dat <- cov.dat %>%
+  mutate(Dataset=sub("_", "", Dataset))
+
 # strip entries with no phenotypic data
 retain.ids <- complete.cases(cov.dat)
 cov.dat <- cov.dat[retain.ids,] %>%
@@ -105,6 +108,9 @@ retain.dims <- sapply(1:dim(gr.dat)[2], function(j) {
   }))
 })
 gr.dat <- gr.dat[,retain.dims]
+
+sum.stats <- summarize(gr.dat, cov.dat, n.vertices=n.vertices)
+saveRDS(sum.stats, file=sprintf('/base/data/dcorr/sum_stats_%s_%s.rds', modality, parcellation))
 
 results <- lapply(c("Raw", "Ranked", "Z-Score", "ComBat"), function(norm) {
   if (norm == "ComBat") {
