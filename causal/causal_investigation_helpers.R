@@ -113,8 +113,9 @@ causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
                mutate(Effect.Name="Site"))
     }, error=function(e) {
       return(data.frame(Data=c("Untrimmed", "Trimmed"), Method="PDcor", Dataset.Trt=dset.i,
-                        Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=NA, p.value=NA, Overlap=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i),
-                                                                                                               cov.dat.ij %>% filter(Dataset == dset.j))))
+                        Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=NA, p.value=NA,
+                        Overlap=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i),
+                                                cov.dat.ij %>% filter(Dataset == dset.j))))
     })
   }, mc.cores = mc.cores))
   return(result)
@@ -161,7 +162,8 @@ compute_effect <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=100,
 
     result <- data.frame(Method="PDcor", Effect.Name=E1.name, Effect=test.uncor$estimate, Effect.lwr.jk=ci.jk[1], Effect.upr.jk=ci.jk[2],
                          # Effect.lwr.npboot=ci.npboot[1], Effect.upr.npboot=ci.npboot[2],
-                         p.value=test.uncor$p.value, Entropy=entropy(as.numeric(cov.dat.i[[E1.name]]), method="MM"), Variance=var(as.numeric(cov.dat.i[[E1.name]])),
+                         p.value=test.uncor$p.value, Entropy=entropy(as.numeric(cov.dat.i[[E1.name]]), method="MM"),
+                         Variance=var(as.numeric(cov.dat.i[[E1.name]])),
                          n=n.i, N=length(unique(cov.dat.i$Subid)))
     return(result)
   }
@@ -337,4 +339,37 @@ ptr.batch <- function(x, datasets) {
   x_rank = rank(x[nz])/(length(nz))
   x[nz] <- x_rank
   return(x)
+}
+
+
+summary_full_driver <- function(graphs, cov.dat, n.vertices) {
+  avg.con <- matrix(apply(graphs, c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  
+  avg.male <- matrix(apply(graphs[cov.dat$Sex == 2,], c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  avg.female <- matrix(apply(graphs[cov.dat$Sex == 1,], c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  
+  age.cuts <- quantile(cov.dat$Age, probs=c(.2, .8))
+  avg.young <- matrix(apply(graphs[cov.dat$Age <= age.cuts[1],], c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  avg.old <- matrix(apply(graphs[cov.dat$Age >= age.cuts[2],], c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  return(list(All=avg.con, Male=avg.male, Female=avg.female, Young=avg.young, Old=avg.old))
+}
+
+summarize_over <- function(graphs, cov.dat, dimname, n.vertices) {
+  unique.dim <- unique(cov.dat[[dimname]])
+  res <- lapply(unique.dim, function(x) {
+    gr.set <- graphs[cov.dat[[dimname]] == x,]
+    cov.set <- cov.dat[cov.dat[[dimname]] == x,]
+    
+    return(summary_full_driver(gr.set, cov.set, n.vertices))
+  })
+  names(res) <- unique.dim
+  return(res)
+}
+
+sum.stats <- function(graphs, cov.dat, n.vertices) {
+  all.stats <- summary_full_driver(graphs, cov.dat, n.vertices)
+  
+  dset.stats <- summarize_over(graphs, cov.dat, "Dataset", n.vertices)
+  cont.stats <- summarize_over(graphs, cov.dat, "Continent", n.vertices)
+  return(list(All=all.stats, Dataset=dset.stats, Continent=cont.stats))
 }
