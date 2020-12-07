@@ -22,10 +22,11 @@ parcellation <- "AAL"
 modality <- "fMRI"
 mri.path <- file.path(in.path, modality, parcellation)
 
-datasets=c("UWM", "NYU_1", "Utah1", "MRN1", "IBATRT", "UPSM_1", "NYU_2",
-           "BMB1", "IPCAS_8", "IPCAS_4", "SWU3", "SWU2", "IACAS_1", "JHNU",
-           "IPCAS_5", "IPCAS_2", "IPCAS_3", "BNU1", "IPCAS_1", "BNU2",
-           "SWU1", "IPCAS_7", "BNU3", "XHCUMS", "HNU1", "SWU4")
+datasets=c("UWM", "NYU1", "Utah1", "MRN1", "IBATRT", "UPSM1", "NYU2",
+           "BMB1", "IPCAS8", "IPCAS4", "SWU3", "SWU2", "IACAS1", "JHNU",
+           "IPCAS5", "IPCAS2", "IPCAS3", "BNU1", "IPCAS1", "BNU2",
+           "SWU1", "IPCAS7", "BNU3", "XHCUMS", "HNU1", "SWU4", "NKI24tr645", "NKI24tr1400",
+           "NKI24tr2500")
 
 gr.names <- list.files(path=mri.path, pattern="*.csv", recursive=TRUE)
 gr.names <- gr.names[sapply(gr.names, function(name) any(sapply(datasets, function(dataset) {str_detect(name, dataset)})))]
@@ -57,7 +58,7 @@ read.gr <- function(name, mri.path='', format='ncol') {
 gr.out <- list2array(mclapply(gr.names, function(name) {
   read.gr(name,  mri.path=mri.path, format=fmt)
 }, mc.cores=ncores))
-gr.dat <- gr.out$result; good.ids <- gr.out$good.ids
+gr.dat.full <- gr.out$result; good.ids <- gr.out$good.ids
 
 cov.full <- read.csv(pheno.path)
 spl.names <- strsplit(basename(gr.names[good.ids]), '_|-')
@@ -85,11 +86,11 @@ cov.dat <- do.call(rbind, mclapply(1:length(spl.names), function(i) {
   }
 }, mc.cores=ncores))
 
-continent <- c("IBATRT"="North America", "Utah1"="North America", "IPCAS_2"="Asia", "SWU1"="Asia", "UWM"="North America", "XHCUMS"="Asia", "SWU4"="Asia",
-               "BNU2"="Asia", "IPCAS_3"="Asia", "SWU3"="Asia", "IPCAS_4"="Asia", "NYU2"="North America", "IPCAS_1"="Asia",
-               "IPCAS_7"="Asia", "UPSM_1"="North America", "IACAS_1"="Asia", "IPCAS_5"="Asia", "NYU_1"="North America", "NYU_2"="North America", "BNU1"="Asia",
-               "MRN1"="North America", "BNU3"="Asia", "HNU1"="Asia", "SWU2"="Asia", "IPCAS_8"="Asia", "JHNU"="Asia", "IPCAS_6"="Asia",
-               "BMB1"="Europe")
+continent <- c("IBATRT"="North America", "Utah1"="North America", "IPCAS2"="Asia", "SWU1"="Asia", "UWM"="North America", "XHCUMS"="Asia", "SWU4"="Asia",
+               "BNU2"="Asia", "IPCAS3"="Asia", "SWU3"="Asia", "IPCAS4"="Asia", "NYU2"="North America", "IPCAS1"="Asia",
+               "IPCAS7"="Asia", "UPSM1"="North America", "IACAS1"="Asia", "IPCAS5"="Asia", "NYU1"="North America", "NYU2"="North America", "BNU1"="Asia",
+               "MRN1"="North America", "BNU3"="Asia", "HNU1"="Asia", "SWU2"="Asia", "IPCAS8"="Asia", "JHNU"="Asia", "IPCAS6"="Asia",
+               "BMB1"="Europe", "NKI24tr645"="North America", "NKI24tr1400"="North America", "NKI24tr2500"="North America")
 cov.dat$Continent <- as.character(continent[as.character(cov.dat$Dataset)])
 
 cov.dat <- cov.dat %>%
@@ -100,18 +101,16 @@ retain.ids <- complete.cases(cov.dat)
 cov.dat <- cov.dat[retain.ids,] %>%
   ungroup() %>% mutate(id=row_number(), Continent=factor(Continent),
                        Sex=factor(Sex))
-gr.dat <- gr.dat[retain.ids,]
+gr.dat.full <- gr.dat.full[retain.ids,]
 
-retain.dims <- sapply(1:dim(gr.dat)[2], function(j) {
+retain.dims <- sapply(1:dim(gr.dat.full)[2], function(j) {
   all(sapply(unique(cov.dat$Dataset), function(dataset) {
-    var(gr.dat[cov.dat$Dataset == dataset,j]) > 0
+    var(gr.dat.full[cov.dat$Dataset == dataset,j]) > 0
   }))
 })
-gr.dat <- gr.dat[,retain.dims]
+gr.dat <- gr.dat.full[,retain.dims]
 
-sum.stats <- summarize(gr.dat, cov.dat, n.vertices=n.vertices)
-saveRDS(sum.stats, file=sprintf('/base/data/dcorr/sum_stats_%s_%s.rds', modality, parcellation))
-
+R=10000
 results <- lapply(c("Raw", "Ranked", "Z-Score", "ComBat"), function(norm) {
   if (norm == "ComBat") {
     dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset))
@@ -125,17 +124,21 @@ results <- lapply(c("Raw", "Ranked", "Z-Score", "ComBat"), function(norm) {
   # exhaustively compute full distance matrix once since $$$
   Dmtx.norm <- as.matrix(parDist(dat.norm, threads=ncores))
 
-  result.site <- causal_ana_site(Dmtx.norm, cov.dat, mc.cores=ncores)
-  result.cov <- causal_ana_cov(Dmtx.norm, cov.dat, mc.cores=ncores)
+  result.site <- causal_ana_site(Dmtx.norm, cov.dat, mc.cores=ncores, R=R)
+  result.cov <- causal_ana_cov(Dmtx.norm, cov.dat, mc.cores=ncores, R=R)
   #result.cov.cont <- causal_ana_cov_cont(Dmtx.norm, cov.dat, mc.cores=ncores)
   result.signal <- signal_ana(dat.norm, cov.dat, parcellation=parcellation, mc.cores=ncores,
                               retain.dims=retain.dims)
+  gr.dat.norm <- gr.dat.full
+  gr.dat.norm[,retain.dims] <- dat.norm
   return(list(Site=result.site %>% mutate(Method=norm),
               Covariate=result.cov %>% mutate(Method=norm),
               #Covariate.Cont=result.cov.cont %>% mutate(Method=norm),
-              Signal=result.signal %>% mutate(Method=norm)))
+              Signal=result.signal %>% mutate(Method=norm),
+              Stats=sum.stats(gr.dat.norm, cov.dat, n.vertices=n.vertices)))
 })
 
+gr.stats <- lapply(results, function(res) res$Stats)
 result.site <- do.call(rbind, lapply(results, function(res) res$Site)) %>%
   mutate(Modality=modality)
 result.cov <- do.call(rbind, lapply(results, function(res) res$Covariate)) %>%
@@ -146,5 +149,5 @@ result.signal <- do.call(rbind, lapply(results, function(res) res$Signal)) %>%
   mutate(Modality=modality)
 
 saveRDS(list(Site=result.site, Covariate=result.cov, #Covariate.Cont=result.cov.cont,
-             Signal=result.signal),
+             Signal=result.signal, Stats=gr.stats),
         file=sprintf('/base/data/dcorr/pdcorr_outputs_%s_%s.rds', modality, parcellation))
