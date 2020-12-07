@@ -1,3 +1,5 @@
+# docker run -ti --entrypoint /bin/bash -v /cis/project/ndmg/batch_effects/:/data -v /cis/home/ebridge2/Documents/research/graphstats_repos/batch_effects/:/base neurodata/batch_effects:0.0.1
+
 require(tidyverse)
 require(MatchIt)
 require(dplyr)
@@ -83,7 +85,7 @@ causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
                                cov.dat.ij %>% dplyr::select(Continent, Sex, Age) %>%
                                  mutate(Continent=as.numeric(Continent), Sex=as.numeric(Sex),
                                         Age=as.numeric(Age)), R=R)
-      result$uncor <- data.frame(Data="Untrimmed", Method="PDcor", Dataset.Trt=dset.i,
+      result$uncor <- data.frame(Data="Associational", Method="PDcor", Dataset.Trt=dset.i,
                                  Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.uncor$estimate,
                                  p.value=test.uncor$p.value, Overlap=ov.ij)
 
@@ -104,7 +106,12 @@ causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
         if (dim(cov.dat.ij.trim)[1] > n.i) {
           test.trim <- pdcor.test(as.dist(Dmtx.dat.ij.trim), cov.dat.ij.trim$Treatment,
                                   as.matrix(cov.dat.ij.trim %>% dplyr::select(Continent, Sex, Age)), R=R)
-          result$trim <- data.frame(Data="Trimmed", Method="PDcor", Dataset.Trt=dset.i,
+          if (grepl("NKI24", dset.i) & grepl("NKI24", dset.j)) {
+            dat.ind = "Causal Exp."
+          } else {
+            dat.ind = "Causal Obs."
+          }
+          result$trim <- data.frame(Data=dat.ind, Method="PDcor", Dataset.Trt=dset.i,
                                     Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.trim$estimate,
                                     p.value=test.trim$p.value, Overlap=ov.ij)
         }
@@ -112,9 +119,10 @@ causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
       return(do.call(rbind, result) %>%
                mutate(Effect.Name="Site"))
     }, error=function(e) {
-      return(data.frame(Data=c("Untrimmed", "Trimmed"), Method="PDcor", Dataset.Trt=dset.i,
-                        Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=NA, p.value=NA, Overlap=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i),
-                                                                                                               cov.dat.ij %>% filter(Dataset == dset.j))))
+      return(data.frame(Data=c("Associational", "Causal Obs."), Method="PDcor", Dataset.Trt=dset.i,
+                        Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=NA, p.value=NA,
+                        Overlap=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i),
+                                                cov.dat.ij %>% filter(Dataset == dset.j))))
     })
   }, mc.cores = mc.cores))
   return(result)
@@ -135,16 +143,6 @@ compute_effect <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=100,
 
     test.uncor <- pdcor.test(D.i, as.numeric(cov.dat.i[[E1.name]]),
                              as.numeric(cov.dat.i[[E2.name]]), R=R)
-    ## Bootstrapped CIs
-    # bootstr.ci <- simplify2array(mclapply(1:nboots, function(i) {
-    #   ids <- sample(1:n.i, size=n.i, replace = TRUE)
-    #   cov.dat.boot <- cov.dat.i[ids,]
-    #   Dmtx.dat.boot <- as.dist(as.matrix(D.i)[ids, ids])
-    #   test.boot <- pdcor(Dmtx.dat.boot, as.numeric(cov.dat.boot[[E1.name]]),
-    #                      as.numeric(cov.dat.boot[[E2.name]]))
-    #   return(test.boot)
-    # }, mc.cores=mc.cores))
-    # ci.npboot <- quantile(bootstr.ci, c(.025, .975))
 
     jk.stat <- simplify2array(mclapply(1:n.i, function(i) {
       ids <- (1:n.i)[-i]
@@ -161,7 +159,8 @@ compute_effect <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=100,
 
     result <- data.frame(Method="PDcor", Effect.Name=E1.name, Effect=test.uncor$estimate, Effect.lwr.jk=ci.jk[1], Effect.upr.jk=ci.jk[2],
                          # Effect.lwr.npboot=ci.npboot[1], Effect.upr.npboot=ci.npboot[2],
-                         p.value=test.uncor$p.value, Entropy=entropy(as.numeric(cov.dat.i[[E1.name]]), method="MM"), Variance=var(as.numeric(cov.dat.i[[E1.name]])),
+                         p.value=test.uncor$p.value, Entropy=entropy(as.numeric(cov.dat.i[[E1.name]]), method="MM"),
+                         Variance=var(as.numeric(cov.dat.i[[E1.name]])),
                          n=n.i, N=length(unique(cov.dat.i$Subid)))
     return(result)
   }
@@ -337,4 +336,37 @@ ptr.batch <- function(x, datasets) {
   x_rank = rank(x[nz])/(length(nz))
   x[nz] <- x_rank
   return(x)
+}
+
+
+summary_full_driver <- function(graphs, cov.dat, n.vertices) {
+  avg.con <- matrix(apply(graphs, c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  
+  avg.male <- matrix(apply(graphs[cov.dat$Sex == 2,], c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  avg.female <- matrix(apply(graphs[cov.dat$Sex == 1,], c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  
+  age.cuts <- quantile(cov.dat$Age, probs=c(.2, .8))
+  avg.young <- matrix(apply(graphs[cov.dat$Age <= age.cuts[1],], c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  avg.old <- matrix(apply(graphs[cov.dat$Age >= age.cuts[2],], c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  return(list(All=avg.con, Male=avg.male, Female=avg.female, Young=avg.young, Old=avg.old))
+}
+
+summarize_over <- function(graphs, cov.dat, dimname, n.vertices) {
+  unique.dim <- unique(cov.dat[[dimname]])
+  res <- lapply(unique.dim, function(x) {
+    gr.set <- graphs[cov.dat[[dimname]] == x,]
+    cov.set <- cov.dat[cov.dat[[dimname]] == x,]
+    
+    return(summary_full_driver(gr.set, cov.set, n.vertices))
+  })
+  names(res) <- unique.dim
+  return(res)
+}
+
+sum.stats <- function(graphs, cov.dat, n.vertices) {
+  all.stats <- summary_full_driver(graphs, cov.dat, n.vertices)
+  
+  dset.stats <- summarize_over(graphs, cov.dat, "Dataset", n.vertices)
+  cont.stats <- summarize_over(graphs, cov.dat, "Continent", n.vertices)
+  return(list(All=all.stats, Dataset=dset.stats, Continent=cont.stats))
 }
