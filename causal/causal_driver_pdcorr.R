@@ -1,3 +1,5 @@
+# docker run -ti --entrypoint /bin/bash -v /cis/project/ndmg/batch_effects/:/data -v /cis/home/ebridge2/Documents/research/graphstats_repos/batch_effects/:/base neurodata/batch_effects:0.0.1
+
 require(tidyverse)
 require(MatchIt)
 require(dplyr)
@@ -112,6 +114,7 @@ gr.dat <- gr.dat.full[,retain.dims]
 
 R=10000
 results <- lapply(c("Raw", "Ranked", "Z-Score", "ComBat"), function(norm) {
+  print(norm)
   if (norm == "ComBat") {
     dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset))
   } else if (norm == "Z-Score") {
@@ -139,6 +142,7 @@ results <- lapply(c("Raw", "Ranked", "Z-Score", "ComBat"), function(norm) {
 })
 
 gr.stats <- lapply(results, function(res) res$Stats)
+names(gr.stats) <- c("Raw", "Ranked", "Z-Score", "ComBat")
 result.site <- do.call(rbind, lapply(results, function(res) res$Site)) %>%
   mutate(Modality=modality)
 result.cov <- do.call(rbind, lapply(results, function(res) res$Covariate)) %>%
@@ -149,5 +153,5 @@ result.signal <- do.call(rbind, lapply(results, function(res) res$Signal)) %>%
   mutate(Modality=modality)
 
 saveRDS(list(Site=result.site, Covariate=result.cov, #Covariate.Cont=result.cov.cont,
-             Signal=result.signal, Stats=gr.stats),
+             Signal=result.signal, Stats=gr.stats, Covar.Tbl=cov.dat),
         file=sprintf('/base/data/dcorr/pdcorr_outputs_%s_%s.rds', modality, parcellation))

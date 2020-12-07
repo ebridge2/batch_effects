@@ -1,5 +1,3 @@
-# docker run -ti --entrypoint /bin/bash -v /cis/project/ndmg/batch_effects/:/data -v /cis/home/ebridge2/Documents/research/graphstats_repos/batch_effects/:/base neurodata/batch_effects:0.0.1
-
 require(tidyverse)
 require(MatchIt)
 require(dplyr)
@@ -343,12 +341,17 @@ summary_full_driver <- function(graphs, cov.dat, n.vertices) {
   avg.con <- matrix(apply(graphs, c(2), mean), nrow=n.vertices, ncol=n.vertices)
   
   avg.male <- matrix(apply(graphs[cov.dat$Sex == 2,], c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  single.male <- matrix(graphs[which(cov.dat$Sex == 2)[1],], nrow=n.vertices, ncol=n.vertices)
   avg.female <- matrix(apply(graphs[cov.dat$Sex == 1,], c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  single.female <- matrix(graphs[which(cov.dat$Sex == 1)[1],], nrow=n.vertices, ncol=n.vertices)
   
   age.cuts <- quantile(cov.dat$Age, probs=c(.2, .8))
   avg.young <- matrix(apply(graphs[cov.dat$Age <= age.cuts[1],], c(2), mean), nrow=n.vertices, ncol=n.vertices)
+  single.young <- matrix(which(graphs[cov.dat$Age <= age.cuts[1])[1],], nrow=n.vertices, ncol=n.vertices)
   avg.old <- matrix(apply(graphs[cov.dat$Age >= age.cuts[2],], c(2), mean), nrow=n.vertices, ncol=n.vertices)
-  return(list(All=avg.con, Male=avg.male, Female=avg.female, Young=avg.young, Old=avg.old))
+  single.old <- matrix(graphs[which(cov.dat$Age <= age.cuts[1])[1],], nrow=n.vertices, ncol=n.vertices)
+  return(list(All=avg.con, Male=avg.male, Female=avg.female, Single.Male=single.male, Single.Female=single.female,
+              Young=avg.young, Old=avg.old, Single.Young=single.young, Single.Old=single.old))
 }
 
 summarize_over <- function(graphs, cov.dat, dimname, n.vertices) {
