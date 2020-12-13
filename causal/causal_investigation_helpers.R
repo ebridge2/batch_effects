@@ -59,8 +59,13 @@ pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as
     tryCatch({
       graphs.ij <- graphs[cov.dat$Dataset %in% c(dset.i, dset.j),]
       cov.ij <- cov.dat %>% filter(Dataset %in% c(dset.i, dset.j))
-      graphs.combt <- t(ComBat(t(graphs.ij), cov.ij$Dataset,
-                               mod = model.matrix(~as.factor(Sex) + Age, data=cov.ij)))
+      if (length(unique(cov.ij$Sex)) > 1) {
+        graphs.combt <- t(ComBat(t(graphs.ij), cov.ij$Dataset,
+                                 mod = model.matrix(~as.factor(Sex) + Age, data=cov.ij)))
+      } else {
+        graphs.combt <- t(ComBat(t(graphs.ij), cov.ij$Dataset,
+                                 mod = model.matrix(~ Age, data=cov.ij)))
+      }
       Dmtx.norm <- as.matrix(dist(graphs.combt))
       
       result.site <- causal_ana_site(Dmtx.norm, cov.ij, mc.cores=1, R=R)
@@ -71,7 +76,7 @@ pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as
                                p.value=c(pdcorr.cov.sex$p.value, pdcorr.cov.age$p.value))
       
       result.signal <- signal_ana(graphs.combt, cov.ij, parcellation=parcellation,
-                                  mc.cores=ncores, retain.dims=retain.dims) %>%
+                                  mc.cores=1, retain.dims=retain.dims) %>%
         mutate(Dataset.Tgt=dset.i, Dataset.Ctrl=dset.j)
       
       return(list(Site=result.site, Covariate=result.cov, Signal=result.signal))
@@ -380,21 +385,23 @@ compute_overlap <- function(X1, X2) {
 }
 
 signal_ana <- function(data, cov.dat, parcellation="AAL", mc.cores=1, retain.dims=NULL) {
-  if (is.null(retain.ids)) {
+  if (is.null(retain.dims)) {
     stop("Pass removal indices.")
   }
   parc.c <- parcel.comm[[parcellation]]
-  do.call(rbind, lapply(names(parc.c), function(community) {
+  do.call(rbind, lapply(c("Homotopic", "Homophilic"), function(community) {
     cmp.gr <- parc.c[[community]][retain.dims]
     do.call(rbind, mclapply(1:dim(data)[1], function(i) {
-      dmeas <- data[i,]
-      signal <- median(dmeas[cmp.gr == 1 & parcel.comm[[parcellation]]$Upper.Tri == 1]) - 
-        median(dmeas[cmp.gr == 0 & parcel.comm[[parcellation]]$Upper.Tri == 1])
-      test.res <- wilcox.test(dmeas[cmp.gr == 1 & parcel.comm[[parcellation]]$Upper.Tri == 1],
-                              dmeas[cmp.gr == 0 & parcel.comm[[parcellation]]$Upper.Tri == 1], alternative = "greater")
-      return(data.frame(Dataset=cov.dat[i,"Dataset"], Subid=cov.dat[i,"Subid"], Session=cov.dat[i,"Session"],
-                        Signal=signal, Effect.Size=test.res$statistic, p.value=test.res$p.value,
-                        Community=community, Parcellation=parcellation))
+      tryCatch({
+        dmeas <- data[i,]
+        signal <- median(dmeas[cmp.gr == 1 & (parcel.comm[[parcellation]]$Upper.Tri[retain.dims] == 1)]) - 
+          median(dmeas[cmp.gr == 0 & (parcel.comm[[parcellation]]$Upper.Tri[retain.dims] == 1)])
+        test.res <- wilcox.test(dmeas[cmp.gr == 1 & (parcel.comm[[parcellation]]$Upper.Tri[retain.dims] == 1)],
+                                dmeas[cmp.gr == 0 & (parcel.comm[[parcellation]]$Upper.Tri[retain.dims] == 1)], alternative = "greater")
+        return(data.frame(Dataset=cov.dat[i,"Dataset"], Subid=cov.dat[i,"Subid"], Session=cov.dat[i,"Session"],
+                          Signal=signal, Effect.Size=test.res$statistic, p.value=test.res$p.value,
+                          Community=community, Parcellation=parcellation))
+      }, error=function(e) {print(community)})
     }, mc.cores = mc.cores))
   }))
 }

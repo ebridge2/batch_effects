@@ -115,7 +115,7 @@ gr.dat <- gr.dat.full[,retain.dims]
 R=10000
 norm.options <- c("Raw", "Ranked", "Z-Score", "ComBat", "cond. ComBat")
 
-results <- single.norm.driver(gr.dat, gr.dat.full, cov.dat, norm.options=norm.options,
+results <- singlenorm.driver(gr.dat, gr.dat.full, cov.dat, norm.options=norm.options,
                               parcellation="AAL", retain.dims=retain.dims, mc.cores=mc.cores,
                               R=R)
 
@@ -139,5 +139,5 @@ saveRDS(list(Site=result.site, Covariate=result.cov, #Covariate.Cont=result.cov.
 saveRDS(preproc.obj, file=sprintf('/base/data/dcorr/inputs_%s_%s.rds', modality, parcellation))
 
 results.pairwise <- pairwise.driver(gr.dat, cov.dat, parcellation=parcellation, retain.dims=retain.dims,
-                                    mc.cores=ncores, R=R)
+                                    mc.cores=ncores/2, R=R)
 saveRDS(results.pairwise, file=sprintf('/base/data/dcorr/pdcorr_pairwise_%s_%s.rds', modality, parcellation))
