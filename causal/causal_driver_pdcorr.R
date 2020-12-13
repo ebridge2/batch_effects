@@ -113,36 +113,14 @@ retain.dims <- sapply(1:dim(gr.dat.full)[2], function(j) {
 gr.dat <- gr.dat.full[,retain.dims]
 
 R=10000
-results <- lapply(c("Raw", "Ranked", "Z-Score", "ComBat"), function(norm) {
-  print(norm)
-  if (norm == "ComBat") {
-    dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset))
-  } else if (norm == "Z-Score") {
-    dat.norm <- apply.along.dataset(gr.dat, cov.dat$Dataset, zsc.batch)
-  } else if (norm == "Ranked") {
-    dat.norm <- apply.along.dataset(gr.dat, cov.dat$Dataset, ptr.batch)
-  } else {
-    dat.norm <- gr.dat
-  }
-  # exhaustively compute full distance matrix once since $$$
-  Dmtx.norm <- as.matrix(parDist(dat.norm, threads=ncores))
+norm.options <- c("Raw", "Ranked", "Z-Score", "ComBat", "cond. ComBat")
 
-  result.site <- causal_ana_site(Dmtx.norm, cov.dat, mc.cores=ncores, R=R)
-  result.cov <- causal_ana_cov(Dmtx.norm, cov.dat, mc.cores=ncores, R=R)
-  #result.cov.cont <- causal_ana_cov_cont(Dmtx.norm, cov.dat, mc.cores=ncores)
-  result.signal <- signal_ana(dat.norm, cov.dat, parcellation=parcellation, mc.cores=ncores,
-                              retain.dims=retain.dims)
-  gr.dat.norm <- gr.dat.full
-  gr.dat.norm[,retain.dims] <- dat.norm
-  return(list(Site=result.site %>% mutate(Method=norm),
-              Covariate=result.cov %>% mutate(Method=norm),
-              #Covariate.Cont=result.cov.cont %>% mutate(Method=norm),
-              Signal=result.signal %>% mutate(Method=norm),
-              Stats=sum.stats(gr.dat.norm, cov.dat, n.vertices=n.vertices)))
-})
+results <- single.norm.driver(gr.dat, gr.dat.full, cov.dat, norm.options=norm.options,
+                              parcellation="AAL", retain.dims=retain.dims, mc.cores=mc.cores,
+                              R=R)
 
 gr.stats <- lapply(results, function(res) res$Stats)
-names(gr.stats) <- c("Raw", "Ranked", "Z-Score", "ComBat")
+names(gr.stats) <- norm.options
 result.site <- do.call(rbind, lapply(results, function(res) res$Site)) %>%
   mutate(Modality=modality)
 result.cov <- do.call(rbind, lapply(results, function(res) res$Covariate)) %>%
@@ -152,6 +130,14 @@ result.cov <- do.call(rbind, lapply(results, function(res) res$Covariate)) %>%
 result.signal <- do.call(rbind, lapply(results, function(res) res$Signal)) %>%
   mutate(Modality=modality)
 
+preproc.obj <- lapply(results, function(res) {return(list(D=res$D, graphs=res$graphs.full))})
+
+
 saveRDS(list(Site=result.site, Covariate=result.cov, #Covariate.Cont=result.cov.cont,
              Signal=result.signal, Stats=gr.stats, Covar.Tbl=cov.dat),
         file=sprintf('/base/data/dcorr/pdcorr_outputs_%s_%s.rds', modality, parcellation))
+saveRDS(list(D=proc.D, graphs=proc.gr),
+        file=sprintf('/base/data/dcorr/inputs_%s_%s.rds', modality, parcellation))
+
+results.pairwise <- pairwise.driver(gr.dat, cov.dat, parcellation=parcellation, retain.dims=retain.dims,
+                                    mc.cores=mc.cores, R=R)

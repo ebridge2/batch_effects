@@ -39,9 +39,84 @@ des.hetero.gr[1:(70/2), 1:(70/2)] <- 1
 diag(des.hetero.gr) <- NaN
 des.hetero.gr <- as.vector(des.hetero.gr)
 
-aal.comm <- list(Homotopic=aal.homo.gr, Homophilic=aal.hetero.gr)
-des.comm <- list(Homotopic=des.homo.gr, Homophilic=des.hetero.gr)
+tri.gr <- matrix(0, nrow=116, ncol=116)
+tri.gr[upper.tri(tri.gr)] <- 1
+aal.comm <- list(Homotopic=aal.homo.gr, Homophilic=aal.hetero.gr, Upper.Tri=tri.gr)
+
+tri.gr <- matrix(0, nrow=70, ncol=70)
+tri.gr[upper.tri(tri.gr)] <- 1
+des.comm <- list(Homotopic=des.homo.gr, Homophilic=des.hetero.gr, Upper.Tri=tri.gr)
+
 parcel.comm <- list(AAL=aal.comm, Desikan=des.comm)
+
+
+pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as.vector(diag(116)) != 1),
+                            mc.cores=1, R=1000) {
+  datasets <- sort(unique((cov.dat %>% dplyr::select(Dataset))$Dataset))
+  dset.pairs <- combn(datasets, 2)
+  result <- mclapply(1:dim(dset.pairs)[2], function(x) {
+    dset.i <- dset.pairs[1,x]; dset.j <- dset.pairs[2,x]
+    graphs.ij <- graphs[cov.dat$Dataset %in% c(dset.i, dset.j)]
+    cov.ij <- cov.dat %>% filter(Dataset %in% c(dset.i, dset.j))
+    graphs.combt <- t(ComBat(t(graphs), cov.ij$Dataset))
+    Dmtx.norm <- as.matrix(dist(dat.norm))
+    
+    result.site <- causal_ana_site(Dmtx.norm, cov.ij, mc.cores=1, R=R)
+    pdcorr.cov.sex <- pdcor.test(Dmtx.norm, y=cov.ij$Sex, z=cov.ij$Age, R=R)
+    pdcorr.cov.age <- pdcor.test(Dmtx.norm, y=cov.ij$Age, z=cov.ij$Sex, R=R)
+    result.cov <- data.frame(Dataset.Trt=dset.i, Dataset.Ctrl=dset.j, Effect.Name=c("Sex", "Age"),
+                             Effect=c(pdcorr.cov.sex$estimate, pdcorr.cov.age$estimate),
+                             p.value=c(pdcorr.cov.sex$p.value, pdcorr.cov.age$p.value))
+    
+    result.signal <- signal_ana(graphs.combt, cov.ij, parcellation=parcellation,
+                                mc.cores=ncores, retain.dims=retain.dims) %>%
+      mutate(Dataset.Tgt=dset.i, Dataset.Ctrl=dset.j)
+    
+    return(list(Site=result.site, Covariate=result.cov, Signal=result.signal))
+  }, mc.cores=mc.cores)
+  
+  res.site <- do.call(rbind, lapply(result, function(res) res$Site))
+  res.cov <- do.call(rbind, lapply(result, function(res) res$Covariate))
+  res.signal <- do.call(rbind, lapply(result, function(res) res$Signal))
+  return(list(Site=res.site, Covariate=res.cov, Signal=res.signal))
+}
+
+singlenorm.driver <- function(graphs, gr.dat.full, cov.dat,
+                              norm.options = c("Raw", "Ranked", "Z-Score", "ComBat", "cond. ComBat"),
+                              parcellation="AAL", retain.dims=(as.vector(diag(116)) !+ 1),
+                              mc.cores=1, R=1000) {
+  lapply(norm.options, function(norm) {
+    print(norm)
+    if (norm == "ComBat") {
+      dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset))
+    } else if (norm == "Z-Score") {
+      dat.norm <- apply.along.dataset(gr.dat, cov.dat$Dataset, zsc.batch)
+    } else if (norm == "Ranked") {
+      dat.norm <- apply.along.dataset(gr.dat, cov.dat$Dataset, ptr.batch)
+    } else if (norm == "Raw") {
+      dat.norm <- gr.dat
+    } else if (norm == "cond. ComBat") {
+      dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset,
+                           mod = model.matrix(~as.factor(Continent) + as.factor(Sex) + Age, data=cov.dat)))
+    }
+    # exhaustively compute full distance matrix once since $$$
+    Dmtx.norm <- as.matrix(parDist(dat.norm, threads=ncores))
+    result.site <- causal_ana_site(Dmtx.norm, cov.dat, mc.cores=ncores, R=R)
+    result.cov <- causal_ana_cov(Dmtx.norm, cov.dat, mc.cores=ncores, R=R)
+    #result.cov.cont <- causal_ana_cov_cont(Dmtx.norm, cov.dat, mc.cores=ncores)
+    result.signal <- signal_ana(dat.norm, cov.dat, parcellation=parcellation, mc.cores=ncores,
+                                retain.dims=retain.dims)
+    gr.dat.norm <- gr.dat.full
+    gr.dat.norm[,retain.dims] <- dat.norm
+    gr.stats <- sum.stats(gr.dat.norm, cov.dat, n.vertices=n.vertices)
+    
+    return(list(Site=result.site %>% mutate(Method=norm),
+                Covariate=result.cov %>% mutate(Method=norm),
+                #Covariate.Cont=result.cov.cont %>% mutate(Method=norm),
+                Signal=result.signal %>% mutate(Method=norm),
+                Stats=gr.stats, D=Dmtx.norm, graphs.full=gr.dat.norm))
+  })
+}
 
 compute_propensities <- function(df, form="Treatment ~ Sex + Age + Continent", trim=.01) {
   df$prop_scores <- glm(form, family=binomial(link="logit"), data=df)$fitted.values
@@ -308,8 +383,10 @@ signal_ana <- function(data, cov.dat, parcellation="AAL", mc.cores=1, retain.dim
     cmp.gr <- parc.c[[community]][retain.dims]
     do.call(rbind, mclapply(1:dim(data)[1], function(i) {
       dmeas <- data[i,]
-      signal <- median(dmeas[cmp.gr == 1]) - median(dmeas[cmp.gr == 0])
-      test.res <- wilcox.test(dmeas[cmp.gr == 1], dmeas[cmp.gr == 0], alternative = "greater")
+      signal <- median(dmeas[cmp.gr == 1 & parcel.comm[[parcellation]]$Upper.Tri == 1]) - 
+        median(dmeas[cmp.gr == 0 & parcel.comm[[parcellation]]$Upper.Tri == 1])
+      test.res <- wilcox.test(dmeas[cmp.gr == 1 & parcel.comm[[parcellation]]$Upper.Tri == 1],
+                              dmeas[cmp.gr == 0 & parcel.comm[[parcellation]]$Upper.Tri == 1], alternative = "greater")
       return(data.frame(Dataset=cov.dat[i,"Dataset"], Subid=cov.dat[i,"Subid"], Session=cov.dat[i,"Session"],
                         Signal=signal, Effect.Size=test.res$statistic, p.value=test.res$p.value,
                         Community=community, Parcellation=parcellation))
@@ -341,17 +418,19 @@ summary_full_driver <- function(graphs, cov.dat, n.vertices) {
   avg.con <- matrix(apply(graphs, c(2), mean), nrow=n.vertices, ncol=n.vertices)
   
   avg.male <- matrix(apply(graphs[cov.dat$Sex == 2,], c(2), mean), nrow=n.vertices, ncol=n.vertices)
-  single.male <- matrix(graphs[which(cov.dat$Sex == 2)[1],], nrow=n.vertices, ncol=n.vertices)
   avg.female <- matrix(apply(graphs[cov.dat$Sex == 1,], c(2), mean), nrow=n.vertices, ncol=n.vertices)
-  single.female <- matrix(graphs[which(cov.dat$Sex == 1)[1],], nrow=n.vertices, ncol=n.vertices)
   
   age.cuts <- quantile(cov.dat$Age, probs=c(.2, .8))
   avg.young <- matrix(apply(graphs[cov.dat$Age <= age.cuts[1],], c(2), mean), nrow=n.vertices, ncol=n.vertices)
-  single.young <- matrix(which(graphs[cov.dat$Age <= age.cuts[1])[1],], nrow=n.vertices, ncol=n.vertices)
   avg.old <- matrix(apply(graphs[cov.dat$Age >= age.cuts[2],], c(2), mean), nrow=n.vertices, ncol=n.vertices)
-  single.old <- matrix(graphs[which(cov.dat$Age <= age.cuts[1])[1],], nrow=n.vertices, ncol=n.vertices)
-  return(list(All=avg.con, Male=avg.male, Female=avg.female, Single.Male=single.male, Single.Female=single.female,
-              Young=avg.young, Old=avg.old, Single.Young=single.young, Single.Old=single.old))
+  
+  male.old <- matrix(graphs[which(cov.dat$Sex == 2 & cov.dat$Age > age.cuts[2])[1],], nrow=n.vertices, ncol=n.vertices)
+  male.young <- matrix(graphs[which(cov.dat$Sex == 2 & cov.dat$Age <= age.cuts[1])[1],], nrow=n.vertices, ncol=n.vertices)
+  
+  female.old <- matrix(graphs[which(cov.dat$Sex == 1 & cov.dat$Age > age.cuts[2])[1],], nrow=n.vertices, ncol=n.vertices)
+  female.young <- matrix(graphs[which(cov.dat$Sex == 1 & cov.dat$Age <= age.cuts[1])[1],], nrow=n.vertices, ncol=n.vertices)
+  return(list(All=avg.con, Male=avg.male, Female=avg.female, Young=avg.young, Old=avg.old, 
+              Female.Young=female.young, Female.Old=female.old, Male.Old=male.old, Male.Young=male.young))
 }
 
 summarize_over <- function(graphs, cov.dat, dimname, n.vertices) {
