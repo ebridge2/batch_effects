@@ -131,13 +131,13 @@ result.signal <- do.call(rbind, lapply(results, function(res) res$Signal)) %>%
   mutate(Modality=modality)
 
 preproc.obj <- lapply(results, function(res) {return(list(D=res$D, graphs=res$graphs.full))})
-
+names(preproc.obj) <- norm.options
 
 saveRDS(list(Site=result.site, Covariate=result.cov, #Covariate.Cont=result.cov.cont,
              Signal=result.signal, Stats=gr.stats, Covar.Tbl=cov.dat),
         file=sprintf('/base/data/dcorr/pdcorr_outputs_%s_%s.rds', modality, parcellation))
-saveRDS(list(D=proc.D, graphs=proc.gr),
-        file=sprintf('/base/data/dcorr/inputs_%s_%s.rds', modality, parcellation))
+saveRDS(preproc.obj, file=sprintf('/base/data/dcorr/inputs_%s_%s.rds', modality, parcellation))
 
 results.pairwise <- pairwise.driver(gr.dat, cov.dat, parcellation=parcellation, retain.dims=retain.dims,
-                                    mc.cores=mc.cores, R=R)
+                                    mc.cores=ncores, R=R)
+saveRDS(results.pairwise, file=sprintf('/base/data/dcorr/pdcorr_pairwise_%s_%s.rds', modality, parcellation))
