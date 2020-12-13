@@ -55,10 +55,23 @@ pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as
   datasets <- sort(unique((cov.dat %>% dplyr::select(Dataset))$Dataset))
   dset.pairs <- combn(datasets, 2)
   result <- mclapply(1:dim(dset.pairs)[2], function(x) {
-    dset.i <- dset.pairs[1,x]; dset.j <- dset.pairs[2,x]
+    dset.1 <- dset.pairs[1,x]
+    dset.2 <- dset.pairs[2,x]
+    n.1 <- sum(cov.dat$Dataset == dset.1)
+    n.2 <- sum(cov.dat$Dataset == dset.2)
+    # Control is always larger of the two for all combn
+    if (n.1 < n.2) {
+      dset.i <- dset.1; dset.j <- dset.2
+      n.i <- n.1; n.j <- n.2
+    } else if (n.1 >= n.2) {
+      dset.i <- dset.2; dset.j <- dset.1
+      n.i <- n.2; n.j <- n.1
+    }
+    graphs.ij <- graphs[as.character(cov.dat$Dataset) %in% c(dset.i, dset.j),]
+    cov.ij <- cov.dat %>%
+      filter(Dataset %in% c(dset.i, dset.j)) %>%
+      mutate(Treatment = as.numeric(Dataset == dset.i))
     tryCatch({
-      graphs.ij <- graphs[cov.dat$Dataset %in% c(dset.i, dset.j),]
-      cov.ij <- cov.dat %>% filter(Dataset %in% c(dset.i, dset.j))
       if (length(unique(cov.ij$Sex)) > 1) {
         graphs.combt <- t(ComBat(t(graphs.ij), cov.ij$Dataset,
                                  mod = model.matrix(~as.factor(Sex) + Age, data=cov.ij)))
@@ -68,7 +81,7 @@ pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as
       }
       Dmtx.norm <- as.matrix(dist(graphs.combt))
       
-      result.site <- causal_ana_site(Dmtx.norm, cov.ij, mc.cores=1, R=R)
+      result.site <- site_pair(Dmtx.norm, cov.ij, dset.i=dset.i, dset.j=dset.j, R=R)
       pdcorr.cov.sex <- pdcor.test(Dmtx.norm, y=cov.ij$Sex, z=cov.ij$Age, R=R)
       pdcorr.cov.age <- pdcor.test(Dmtx.norm, y=cov.ij$Age, z=cov.ij$Sex, R=R)
       result.cov <- data.frame(Dataset.Trt=dset.i, Dataset.Ctrl=dset.j, Effect.Name=c("Sex", "Age"),
@@ -139,11 +152,58 @@ compute_propensities <- function(df, form="Treatment ~ Sex + Age + Continent", t
   return(df)
 }
 
+site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
+  result <- list()
+  tryCatch({
+    ## Uncorrected
+    test.uncor <- pdcor.test(as.dist(Dmtx.dat.ij), cov.dat.ij$Treatment,
+                             cov.dat.ij %>% dplyr::select(Continent, Sex, Age) %>%
+                               mutate(Continent=as.numeric(Continent), Sex=as.numeric(Sex),
+                                      Age=as.numeric(Age)), R=R)
+    result$uncor <- data.frame(Data="Associational", Method="PDcor", Dataset.Trt=dset.i,
+                               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.uncor$estimate,
+                               p.value=test.uncor$p.value, Overlap=ov.ij)
+    
+    ## Trimmed
+    if (length(unique((cov.dat.ij %>% filter(Dataset == dset.i) %>% dplyr::select(Sex))$Sex)) == 1) {
+      form <- "Treatment ~ Age"
+    } else {
+      form <- "Treatment ~ Age + Sex"
+    }
+    if (unique((cov.dat.ij %>% filter(Dataset == dset.i))$Continent) == unique((cov.dat.ij %>% filter(Dataset == dset.j))$Continent)) {
+      cov.dat.ij.prop <- compute_propensities(cov.dat.ij, form=form, trim=.01)
+      # subset dmatrix by untrimmed data
+      Dmtx.dat.ij.trim <- Dmtx.dat.ij[cov.dat.ij.prop$Stay, cov.dat.ij.prop$Stay]
+      cov.dat.ij.trim <- cov.dat.ij.prop %>%
+        filter(Stay == TRUE) %>%
+        dplyr::select(Age, Sex, Continent, Treatment) %>%
+        mutate(Age=as.numeric(Age), Sex=as.numeric(Sex), Continent=as.numeric(Continent))
+      if (dim(cov.dat.ij.trim)[1] > n.i) {
+        test.trim <- pdcor.test(as.dist(Dmtx.dat.ij.trim), cov.dat.ij.trim$Treatment,
+                                as.matrix(cov.dat.ij.trim %>% dplyr::select(Continent, Sex, Age)), R=R)
+        if (grepl("NKI24", dset.i) & grepl("NKI24", dset.j)) {
+          dat.ind = "Causal Exp."
+        } else {
+          dat.ind = "Causal Obs."
+        }
+        result$trim <- data.frame(Data=dat.ind, Method="PDcor", Dataset.Trt=dset.i,
+                                  Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.trim$estimate,
+                                  p.value=test.trim$p.value, Overlap=ov.ij)
+      }
+    }
+    return(do.call(rbind, result) %>%
+             mutate(Effect.Name="Site"))
+  }, error=function(e) {
+    return(data.frame(Data=c("Associational", "Causal Obs."), Method="PDcor", Dataset.Trt=dset.i,
+              Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=NA, p.value=NA,
+              Overlap=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i),
+                                      cov.dat.ij %>% filter(Dataset == dset.j))))
+  })
+}
 causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
   datasets <- sort(unique((cov.dat %>% dplyr::select(Dataset))$Dataset))
   dset.pairs <- combn(datasets, 2)
   result <- do.call(rbind, mclapply(1:dim(dset.pairs)[2], function(x) {
-    result <- list()
     # get first and second dset
     dset.1 <- dset.pairs[1,x]
     dset.2 <- dset.pairs[2,x]
@@ -161,52 +221,8 @@ causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
       filter(Dataset %in% c(dset.i, dset.j)) %>%
       mutate(Treatment = as.numeric(Dataset == dset.i))
     ov.ij=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i), cov.dat.ij %>% filter(Dataset == dset.j))
-    tryCatch({
-      Dmtx.dat.ij <- Dmtx.dat[cov.dat.ij$id, cov.dat.ij$id]
-      ## Uncorrected
-      test.uncor <- pdcor.test(as.dist(Dmtx.dat.ij), cov.dat.ij$Treatment,
-                               cov.dat.ij %>% dplyr::select(Continent, Sex, Age) %>%
-                                 mutate(Continent=as.numeric(Continent), Sex=as.numeric(Sex),
-                                        Age=as.numeric(Age)), R=R)
-      result$uncor <- data.frame(Data="Associational", Method="PDcor", Dataset.Trt=dset.i,
-                                 Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.uncor$estimate,
-                                 p.value=test.uncor$p.value, Overlap=ov.ij)
-
-      ## Trimmed
-      if (length(unique((cov.dat.ij %>% filter(Dataset == dset.i) %>% dplyr::select(Sex))$Sex)) == 1) {
-        form <- "Treatment ~ Age"
-      } else {
-        form <- "Treatment ~ Age + Sex"
-      }
-      if (unique((cov.dat.ij %>% filter(Dataset == dset.i))$Continent) == unique((cov.dat.ij %>% filter(Dataset == dset.j))$Continent)) {
-        cov.dat.ij.prop <- compute_propensities(cov.dat.ij, form=form, trim=.01)
-        # subset dmatrix by untrimmed data
-        Dmtx.dat.ij.trim <- Dmtx.dat.ij[cov.dat.ij.prop$Stay, cov.dat.ij.prop$Stay]
-        cov.dat.ij.trim <- cov.dat.ij.prop %>%
-          filter(Stay == TRUE) %>%
-          dplyr::select(Age, Sex, Continent, Treatment) %>%
-          mutate(Age=as.numeric(Age), Sex=as.numeric(Sex), Continent=as.numeric(Continent))
-        if (dim(cov.dat.ij.trim)[1] > n.i) {
-          test.trim <- pdcor.test(as.dist(Dmtx.dat.ij.trim), cov.dat.ij.trim$Treatment,
-                                  as.matrix(cov.dat.ij.trim %>% dplyr::select(Continent, Sex, Age)), R=R)
-          if (grepl("NKI24", dset.i) & grepl("NKI24", dset.j)) {
-            dat.ind = "Causal Exp."
-          } else {
-            dat.ind = "Causal Obs."
-          }
-          result$trim <- data.frame(Data=dat.ind, Method="PDcor", Dataset.Trt=dset.i,
-                                    Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.trim$estimate,
-                                    p.value=test.trim$p.value, Overlap=ov.ij)
-        }
-      }
-      return(do.call(rbind, result) %>%
-               mutate(Effect.Name="Site"))
-    }, error=function(e) {
-      return(data.frame(Data=c("Associational", "Causal Obs."), Method="PDcor", Dataset.Trt=dset.i,
-                        Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=NA, p.value=NA,
-                        Overlap=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i),
-                                                cov.dat.ij %>% filter(Dataset == dset.j))))
-    })
+    Dmtx.dat.ij <- Dmtx.dat[cov.dat.ij$id, cov.dat.ij$id]
+    return(site_pair(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=R))
   }, mc.cores = mc.cores))
   return(result)
 }
