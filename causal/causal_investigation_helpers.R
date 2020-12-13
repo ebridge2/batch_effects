@@ -56,23 +56,28 @@ pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as
   dset.pairs <- combn(datasets, 2)
   result <- mclapply(1:dim(dset.pairs)[2], function(x) {
     dset.i <- dset.pairs[1,x]; dset.j <- dset.pairs[2,x]
-    graphs.ij <- graphs[cov.dat$Dataset %in% c(dset.i, dset.j)]
-    cov.ij <- cov.dat %>% filter(Dataset %in% c(dset.i, dset.j))
-    graphs.combt <- t(ComBat(t(graphs), cov.ij$Dataset))
-    Dmtx.norm <- as.matrix(dist(dat.norm))
-    
-    result.site <- causal_ana_site(Dmtx.norm, cov.ij, mc.cores=1, R=R)
-    pdcorr.cov.sex <- pdcor.test(Dmtx.norm, y=cov.ij$Sex, z=cov.ij$Age, R=R)
-    pdcorr.cov.age <- pdcor.test(Dmtx.norm, y=cov.ij$Age, z=cov.ij$Sex, R=R)
-    result.cov <- data.frame(Dataset.Trt=dset.i, Dataset.Ctrl=dset.j, Effect.Name=c("Sex", "Age"),
-                             Effect=c(pdcorr.cov.sex$estimate, pdcorr.cov.age$estimate),
-                             p.value=c(pdcorr.cov.sex$p.value, pdcorr.cov.age$p.value))
-    
-    result.signal <- signal_ana(graphs.combt, cov.ij, parcellation=parcellation,
-                                mc.cores=ncores, retain.dims=retain.dims) %>%
-      mutate(Dataset.Tgt=dset.i, Dataset.Ctrl=dset.j)
-    
-    return(list(Site=result.site, Covariate=result.cov, Signal=result.signal))
+    tryCatch({
+      graphs.ij <- graphs[cov.dat$Dataset %in% c(dset.i, dset.j),]
+      cov.ij <- cov.dat %>% filter(Dataset %in% c(dset.i, dset.j))
+      graphs.combt <- t(ComBat(t(graphs.ij), cov.ij$Dataset,
+                               mod = model.matrix(~as.factor(Sex) + Age, data=cov.ij)))
+      Dmtx.norm <- as.matrix(dist(graphs.combt))
+      
+      result.site <- causal_ana_site(Dmtx.norm, cov.ij, mc.cores=1, R=R)
+      pdcorr.cov.sex <- pdcor.test(Dmtx.norm, y=cov.ij$Sex, z=cov.ij$Age, R=R)
+      pdcorr.cov.age <- pdcor.test(Dmtx.norm, y=cov.ij$Age, z=cov.ij$Sex, R=R)
+      result.cov <- data.frame(Dataset.Trt=dset.i, Dataset.Ctrl=dset.j, Effect.Name=c("Sex", "Age"),
+                               Effect=c(pdcorr.cov.sex$estimate, pdcorr.cov.age$estimate),
+                               p.value=c(pdcorr.cov.sex$p.value, pdcorr.cov.age$p.value))
+      
+      result.signal <- signal_ana(graphs.combt, cov.ij, parcellation=parcellation,
+                                  mc.cores=ncores, retain.dims=retain.dims) %>%
+        mutate(Dataset.Tgt=dset.i, Dataset.Ctrl=dset.j)
+      
+      return(list(Site=result.site, Covariate=result.cov, Signal=result.signal))
+    }, error=function(e) {
+      return(NULL)
+    })
   }, mc.cores=mc.cores)
   
   res.site <- do.call(rbind, lapply(result, function(res) res$Site))
@@ -83,7 +88,7 @@ pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as
 
 singlenorm.driver <- function(graphs, gr.dat.full, cov.dat,
                               norm.options = c("Raw", "Ranked", "Z-Score", "ComBat", "cond. ComBat"),
-                              parcellation="AAL", retain.dims=(as.vector(diag(116)) !+ 1),
+                              parcellation="AAL", retain.dims=(as.vector(diag(116)) != 1),
                               mc.cores=1, R=1000) {
   lapply(norm.options, function(norm) {
     print(norm)
@@ -97,7 +102,7 @@ singlenorm.driver <- function(graphs, gr.dat.full, cov.dat,
       dat.norm <- gr.dat
     } else if (norm == "cond. ComBat") {
       dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset,
-                           mod = model.matrix(~as.factor(Continent) + as.factor(Sex) + Age, data=cov.dat)))
+                           mod = model.matrix(~as.factor(Sex) + Age, data=cov.dat)))
     }
     # exhaustively compute full distance matrix once since $$$
     Dmtx.norm <- as.matrix(parDist(dat.norm, threads=ncores))
