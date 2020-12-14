@@ -154,6 +154,7 @@ compute_propensities <- function(df, form="Treatment ~ Sex + Age + Continent", t
 
 site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
   result <- list()
+  ov.ij=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i), cov.dat.ij %>% filter(Dataset == dset.j))
   tryCatch({
     ## Uncorrected
     test.uncor <- pdcor.test(as.dist(Dmtx.dat.ij), cov.dat.ij$Treatment,
@@ -200,6 +201,7 @@ site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
                                       cov.dat.ij %>% filter(Dataset == dset.j))))
   })
 }
+
 causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
   datasets <- sort(unique((cov.dat %>% dplyr::select(Dataset))$Dataset))
   dset.pairs <- combn(datasets, 2)
