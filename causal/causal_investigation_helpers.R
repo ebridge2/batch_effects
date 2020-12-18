@@ -124,7 +124,7 @@ singlenorm.driver <- function(graphs, gr.dat.full, cov.dat,
       am.cohort <- which(cov.dat$Dataset %in% c("NKI24tr645", "NKI24tr1400", "NKI24tr2500", "NYU1", "UWM",
                                                 "Utah1", "MRN1", "IBATRT", "NYU2"))
       norm.asia <- t(ComBat(t(gr.dat[asia.cohort,]), cov.dat$Dataset[asia.cohort]))
-      norm.am <- t(ComBat(t(gr.dat[am.cohort,], cov.dat$Dataset[am.cohort])))
+      norm.am <- t(ComBat(t(gr.dat[am.cohort,]), cov.dat$Dataset[am.cohort]))
       dat.norm <- rbind(norm.asia, norm.am)
       cov.dat <- rbind(cov.dat[asia.cohort,], cov.dat[am.cohort,])
     }
