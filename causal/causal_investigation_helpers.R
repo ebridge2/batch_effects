@@ -127,6 +127,7 @@ singlenorm.driver <- function(graphs, gr.dat.full, cov.dat,
       norm.am <- t(ComBat(t(gr.dat[am.cohort,]), cov.dat$Dataset[am.cohort]))
       dat.norm <- rbind(norm.asia, norm.am)
       cov.dat <- rbind(cov.dat[asia.cohort,], cov.dat[am.cohort,])
+      gr.dat.full <- gr.dat.full[c(asia.cohort, am.cohort),]
     }
     # exhaustively compute full distance matrix once since $$$
     Dmtx.norm <- as.matrix(parDist(dat.norm, threads=ncores))
