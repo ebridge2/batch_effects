@@ -105,7 +105,7 @@ pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as
 }
 
 singlenorm.driver <- function(graphs, gr.dat.full, cov.dat,
-                              norm.options = c("Raw", "Ranked", "Z-Score", "ComBat", "cond. ComBat"),
+                              norm.options = c("Raw", "Ranked", "Z-Score", "ComBat", "causal ComBat"),
                               parcellation="AAL", retain.dims=(as.vector(diag(116)) != 1),
                               mc.cores=1, R=1000) {
   lapply(norm.options, function(norm) {
@@ -118,9 +118,15 @@ singlenorm.driver <- function(graphs, gr.dat.full, cov.dat,
       dat.norm <- apply.along.dataset(gr.dat, cov.dat$Dataset, ptr.batch)
     } else if (norm == "Raw") {
       dat.norm <- gr.dat
-    } else if (norm == "cond. ComBat") {
-      dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset,
-                           mod = model.matrix(~as.factor(Sex) + Age, data=cov.dat)))
+    } else if (norm == "causal ComBat") {
+      asia.cohort <- which(cov.dat$Dataset %in% c("SWU4", "HNU1", "BNU3", "SWU1", "BNU2", "IPCAS1",
+                                                   "BNU1", "IPCAS6", "IPCAS3", "SWU2", "SWU3", "IPCAS4"))
+      am.cohort <- which(cov.dat$Dataset %in% c("NKI24tr645", "NKI24tr1400", "NKI24tr2500", "NYU1", "UWM",
+                                                "Utah1", "MRN1", "IBATRT", "NYU2"))
+      norm.asia <- t(ComBat(t(gr.dat[asia.cohort,]), cov.dat$Dataset[asia.cohort]))
+      norm.am <- t(ComBat(t(gr.dat[am.cohort,], cov.dat$Dataset[am.cohort])))
+      dat.norm <- rbind(norm.asia, norm.am)
+      cov.dat <- rbind(cov.dat[asia.cohort,], cov.dat[am.cohort,])
     }
     # exhaustively compute full distance matrix once since $$$
     Dmtx.norm <- as.matrix(parDist(dat.norm, threads=ncores))
@@ -407,15 +413,16 @@ signal_ana <- function(data, cov.dat, parcellation="AAL", mc.cores=1, retain.dim
     stop("Pass removal indices.")
   }
   parc.c <- parcel.comm[[parcellation]]
+  upper.tri.edges <- parcel.comm[[parcellation]]$Upper.Tri[retain.dims]
   do.call(rbind, lapply(c("Homotopic", "Homophilic"), function(community) {
     cmp.gr <- parc.c[[community]][retain.dims]
     do.call(rbind, mclapply(1:dim(data)[1], function(i) {
       tryCatch({
         dmeas <- data[i,]
-        signal <- median(dmeas[cmp.gr == 1 & (parcel.comm[[parcellation]]$Upper.Tri[retain.dims] == 1)]) - 
-          median(dmeas[cmp.gr == 0 & (parcel.comm[[parcellation]]$Upper.Tri[retain.dims] == 1)])
-        test.res <- wilcox.test(dmeas[cmp.gr == 1 & (parcel.comm[[parcellation]]$Upper.Tri[retain.dims] == 1)],
-                                dmeas[cmp.gr == 0 & (parcel.comm[[parcellation]]$Upper.Tri[retain.dims] == 1)], alternative = "greater")
+        signal <- median(dmeas[cmp.gr == 1 & (upper.tri.edges == 1)]) - 
+          median(dmeas[cmp.gr == 0 & (upper.tri.edges == 1)])
+        test.res <- wilcox.test(dmeas[cmp.gr == 1 & (upper.tri.edges == 1)],
+                                dmeas[cmp.gr == 0 & (upper.tri.edges == 1)], alternative = "greater")
         return(data.frame(Dataset=cov.dat[i,"Dataset"], Subid=cov.dat[i,"Subid"], Session=cov.dat[i,"Session"],
                           Signal=signal, Effect.Size=test.res$statistic, p.value=test.res$p.value,
                           Community=community, Parcellation=parcellation))
