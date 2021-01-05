@@ -101,7 +101,7 @@ cov.dat <- cov.dat %>%
 # strip entries with no phenotypic data
 retain.ids <- complete.cases(cov.dat)
 cov.dat <- cov.dat[retain.ids,] %>%
-  ungroup() %>% mutate(id=row_number(), Continent=factor(Continent),
+  ungroup() %>% mutate(Continent=factor(Continent),
                        Sex=factor(Sex))
 gr.dat.full <- gr.dat.full[retain.ids,]
 
@@ -113,7 +113,7 @@ retain.dims <- sapply(1:dim(gr.dat.full)[2], function(j) {
 gr.dat <- gr.dat.full[,retain.dims]
 
 R=10000
-norm.options <- c("Raw", "Ranked", "Z-Score", "ComBat", "cond. ComBat")
+norm.options <- c("Raw", "Ranked", "Z-Score", "ComBat", "causal ComBat")
 
 results <- singlenorm.driver(gr.dat, gr.dat.full, cov.dat, norm.options=norm.options,
                               parcellation="AAL", retain.dims=retain.dims, mc.cores=mc.cores,
@@ -137,7 +137,4 @@ saveRDS(list(Site=result.site, Covariate=result.cov, #Covariate.Cont=result.cov.
              Signal=result.signal, Stats=gr.stats, Covar.Tbl=cov.dat),
         file=sprintf('/base/data/dcorr/pdcorr_outputs_%s_%s.rds', modality, parcellation))
 saveRDS(preproc.obj, file=sprintf('/base/data/dcorr/inputs_%s_%s.rds', modality, parcellation))
-
-results.pairwise <- pairwise.driver(gr.dat, cov.dat, parcellation=parcellation, retain.dims=retain.dims,
-                                    mc.cores=ncores/2, R=R)
-saveRDS(results.pairwise, file=sprintf('/base/data/dcorr/pdcorr_pairwise_%s_%s.rds', modality, parcellation))
+se_%s_%s.rds', modality, parcellation))
