@@ -137,4 +137,3 @@ saveRDS(list(Site=result.site, Covariate=result.cov, #Covariate.Cont=result.cov.
              Signal=result.signal, Stats=gr.stats, Covar.Tbl=cov.dat),
         file=sprintf('/base/data/dcorr/pdcorr_outputs_%s_%s.rds', modality, parcellation))
 saveRDS(preproc.obj, file=sprintf('/base/data/dcorr/inputs_%s_%s.rds', modality, parcellation))
-se_%s_%s.rds', modality, parcellation))

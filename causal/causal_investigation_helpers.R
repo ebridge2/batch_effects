@@ -104,7 +104,7 @@ pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as
   return(list(Site=res.site, Covariate=res.cov, Signal=res.signal))
 }
 
-singlenorm.driver <- function(graphs, gr.dat.full, cov.dat,
+singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
                               norm.options = c("Raw", "Ranked", "Z-Score", "ComBat", "causal ComBat"),
                               parcellation="AAL", retain.dims=(as.vector(diag(116)) != 1),
                               mc.cores=1, R=1000) {
@@ -196,7 +196,7 @@ site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
         filter(Stay == TRUE) %>%
         dplyr::select(Age, Sex, Continent, Treatment) %>%
         mutate(Age=as.numeric(Age), Sex=as.numeric(Sex), Continent=as.numeric(Continent))
-      if (dim(cov.dat.ij.trim)[1] > n.i) {
+      if (dim(cov.dat.ij.trim)[1] > sum(cov.dat.ij$Treatment)) {
         test.trim <- pdcor.test(as.dist(Dmtx.dat.ij.trim), cov.dat.ij.trim$Treatment,
                                 as.matrix(cov.dat.ij.trim %>% dplyr::select(Continent, Sex, Age)), R=R)
         if (grepl("NKI24", dset.i) & grepl("NKI24", dset.j)) {
@@ -212,6 +212,7 @@ site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
     return(do.call(rbind, result) %>%
              mutate(Effect.Name="Site"))
   }, error=function(e) {
+    print(e)
     return(data.frame(Data=c("Associational", "Causal Obs."), Method="PDcor", Dataset.Trt=dset.i,
               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=NA, p.value=NA,
               Overlap=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i),
