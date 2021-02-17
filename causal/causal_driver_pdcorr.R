@@ -1,5 +1,5 @@
 # docker run -ti --entrypoint /bin/bash -v /cis/project/ndmg/batch_effects/:/data -v /cis/home/ebridge2/Documents/research/graphstats_repos/batch_effects/:/base neurodata/batch_effects:0.0.1
-
+# cd /base/
 require(tidyverse)
 require(MatchIt)
 require(dplyr)

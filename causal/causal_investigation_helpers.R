@@ -129,7 +129,7 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
       # cov.dat <- rbind(cov.dat[asia.cohort,], cov.dat[am.cohort,])
       
       asia.cohort <- which(cov.dat$Dataset %in% c("SWU4", "HNU1", "BNU3", "SWU1", "BNU2", "IPCAS1",
-                                                  "BNU1", "IPCAS6", "IPCAS3", "SWU2", "SWU3", "IPCAS4"))
+                                                  "BNU1", "IPCAS3", "SWU2", "SWU3", "IPCAS4"))
       cov.dat <- cov.dat[asia.cohort,]
       mod=model.matrix(~as.factor(Sex) + as.factor(Age), data=cov.dat)
       
@@ -169,45 +169,73 @@ compute_propensities <- function(df, form="Treatment ~ Sex + Age + Continent", t
   return(df)
 }
 
+adjusted.site_effect <- function(Dmtx.ij, cov.ij, form="Treatment ~ Age + Sex", n.k=1, dset.i="", dset.j="", ov.ij=0, R=1000) {
+  tryCatch({
+    cov.dat.ij.prop <- compute_propensities(cov.ij, form=form, trim=.01)
+    # subset dmatrix by untrimmed data
+    Dmtx.ij.trim <- Dmtx.ij[cov.dat.ij.prop$Stay, cov.dat.ij.prop$Stay]
+    cov.dat.ij.trim <- cov.dat.ij.prop %>%
+      filter(Stay == TRUE) %>%
+      dplyr::select(Age, Sex, Continent, Treatment) %>%
+      mutate(Age=as.numeric(Age), Sex=as.factor(Sex), Continent=as.factor(Continent))
+    
+    if (length(unique(cov.dat.ij.trim$Sex)) == 1) {
+      form <- "Treatment ~ Age"
+    }
+    if ("Sex" %in% form) {
+      exact="Sex"
+    } else {
+      exact=NULL
+    }
+    n.k <- floor(sum(cov.dat.ij.trim$Treatment == 0)/sum(cov.dat.ij.trim$Treatment == 1))
+    match <- matchit(formula(form), data=cov.dat.ij.trim, method="nearest", exact=exact, ratio=n.k, caliper=.1)
+    retain.ids <- as.numeric(names(match.data(match)$weights))
+    Dmtx.cmp <- Dmtx.ij.trim[retain.ids, retain.ids]
+    cov.dat.cmp <- cov.dat.ij.trim[retain.ids,]
+    
+    test.adj <- pdcor.test(as.dist(Dmtx.cmp), cov.dat.cmp$Treatment,
+                           cov.dat.cmp %>% select(Sex, Age) %>% mutate(Sex=as.numeric(Sex), Age=as.numeric(Age)), R=R)
+    return(data.frame(Data="Adjusted", Method="Dcor", Dataset.Trt=dset.i,
+                      Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.adj$estimate["dCor"],
+                      p.value=test.adj$p.value, Overlap=ov.ij))
+  }, error=function(e) {
+    return(NULL)
+  })
+}
+
 site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
   result <- list()
   ov.ij=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i), cov.dat.ij %>% filter(Dataset == dset.j))
   tryCatch({
-    ## Uncorrected
-    test.uncor <- pdcor.test(as.dist(Dmtx.dat.ij), cov.dat.ij$Treatment,
+    # Uncorrected
+    test.uncor <- dcor.test(as.dist(Dmtx.dat.ij), cov.dat.ij$Treatment, R=R)
+    result$uncor <- data.frame(Data="Associational", Method="Dcor", Dataset.Trt=dset.i,
+                               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.uncor$estimate["dCor"],
+                               p.value=test.uncor$p.value, Overlap=ov.ij)
+    
+    # If both datasets are NKI, Uncorrected == Causal Crossover
+    if (grepl("NKI24", dset.i) & grepl("NKI24", dset.j)) {
+      result$causal <- result$uncor
+      result$causal$Data <- "Causal Cross."
+    }
+    
+    ## Conditional
+    test.cond <- pdcor.test(as.dist(Dmtx.dat.ij), cov.dat.ij$Treatment,
                              cov.dat.ij %>% dplyr::select(Continent, Sex, Age) %>%
                                mutate(Continent=as.numeric(Continent), Sex=as.numeric(Sex),
                                       Age=as.numeric(Age)), R=R)
-    result$uncor <- data.frame(Data="Associational", Method="PDcor", Dataset.Trt=dset.i,
-                               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.uncor$estimate,
-                               p.value=test.uncor$p.value, Overlap=ov.ij)
+    result$cond <- data.frame(Data="Conditional", Method="PDcor", Dataset.Trt=dset.i,
+                               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.cond$estimate,
+                               p.value=test.cond$p.value, Overlap=ov.ij)
     
-    ## Trimmed
-    if (length(unique((cov.dat.ij %>% filter(Dataset == dset.i) %>% dplyr::select(Sex))$Sex)) == 1) {
+    # Adjusted Approach. If there is only 1 sex amongst both datasets, omit
+    if (length(unique((cov.dat.ij %>% dplyr::select(Sex))$Sex)) == 1) {
       form <- "Treatment ~ Age"
     } else {
       form <- "Treatment ~ Age + Sex"
     }
     if (unique((cov.dat.ij %>% filter(Dataset == dset.i))$Continent) == unique((cov.dat.ij %>% filter(Dataset == dset.j))$Continent)) {
-      cov.dat.ij.prop <- compute_propensities(cov.dat.ij, form=form, trim=.01)
-      # subset dmatrix by untrimmed data
-      Dmtx.dat.ij.trim <- Dmtx.dat.ij[cov.dat.ij.prop$Stay, cov.dat.ij.prop$Stay]
-      cov.dat.ij.trim <- cov.dat.ij.prop %>%
-        filter(Stay == TRUE) %>%
-        dplyr::select(Age, Sex, Continent, Treatment) %>%
-        mutate(Age=as.numeric(Age), Sex=as.numeric(Sex), Continent=as.numeric(Continent))
-      if (dim(cov.dat.ij.trim)[1] > sum(cov.dat.ij$Treatment)) {
-        test.trim <- pdcor.test(as.dist(Dmtx.dat.ij.trim), cov.dat.ij.trim$Treatment,
-                                as.matrix(cov.dat.ij.trim %>% dplyr::select(Continent, Sex, Age)), R=R)
-        if (grepl("NKI24", dset.i) & grepl("NKI24", dset.j)) {
-          dat.ind = "Causal Exp."
-        } else {
-          dat.ind = "Causal Obs."
-        }
-        result$trim <- data.frame(Data=dat.ind, Method="PDcor", Dataset.Trt=dset.i,
-                                  Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.trim$estimate,
-                                  p.value=test.trim$p.value, Overlap=ov.ij)
-      }
+      result$adj <- adjusted.site_effect(Dmtx.dat.ij, cov.dat.ij, form=form, dset.i=dset.i, dset.j=dset.j, R=R, ov.ij=ov.ij)
     }
     return(do.call(rbind, result) %>%
              mutate(Effect.Name="Site"))
