@@ -128,8 +128,7 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
       # dat.norm <- rbind(norm.asia, norm.am)
       # cov.dat <- rbind(cov.dat[asia.cohort,], cov.dat[am.cohort,])
       
-      asia.cohort <- which(cov.dat$Dataset %in% c("SWU4", "HNU1", "BNU3", "SWU1", "BNU2", "IPCAS1",
-                                                  "BNU1", "IPCAS3", "SWU2", "SWU3", "IPCAS4"))
+      asia.cohort <- which(cov.dat$Dataset %in% c("NYU2", "IBATRT", "MRN1", "UWM", "NYU1"))
       cov.dat <- cov.dat[asia.cohort,]
       mod=model.matrix(~as.factor(Sex) + as.factor(Age), data=cov.dat)
       
@@ -169,7 +168,7 @@ compute_propensities <- function(df, form="Treatment ~ Sex + Age + Continent", t
   return(df)
 }
 
-adjusted.site_effect <- function(Dmtx.ij, cov.ij, form="Treatment ~ Age + Sex", n.k=1, dset.i="", dset.j="", ov.ij=0, R=1000) {
+adjusted.site_effect <- function(Dmtx.ij, cov.ij, form="as.factor(Treatment) ~ Age + as.factor(Sex)", dset.i="", dset.j="", ov.ij=0, R=1000) {
   tryCatch({
     cov.dat.ij.prop <- compute_propensities(cov.ij, form=form, trim=.01)
     # subset dmatrix by untrimmed data
@@ -180,14 +179,14 @@ adjusted.site_effect <- function(Dmtx.ij, cov.ij, form="Treatment ~ Age + Sex", 
       mutate(Age=as.numeric(Age), Sex=as.factor(Sex), Continent=as.factor(Continent))
     
     if (length(unique(cov.dat.ij.trim$Sex)) == 1) {
-      form <- "Treatment ~ Age"
+      form <- "as.factor(Treatment) ~ Age"
     }
     if ("Sex" %in% form) {
       exact="Sex"
     } else {
       exact=NULL
     }
-    n.k <- floor(sum(cov.dat.ij.trim$Treatment == 0)/sum(cov.dat.ij.trim$Treatment == 1))
+    n.k <- max(floor(sum(cov.dat.ij.trim$Treatment == 0)/sum(cov.dat.ij.trim$Treatment == 1)), 1)
     match <- matchit(formula(form), data=cov.dat.ij.trim, method="nearest", exact=exact, ratio=n.k, caliper=.1)
     retain.ids <- as.numeric(names(match.data(match)$weights))
     Dmtx.cmp <- Dmtx.ij.trim[retain.ids, retain.ids]
@@ -195,10 +194,11 @@ adjusted.site_effect <- function(Dmtx.ij, cov.ij, form="Treatment ~ Age + Sex", 
     
     test.adj <- pdcor.test(as.dist(Dmtx.cmp), cov.dat.cmp$Treatment,
                            cov.dat.cmp %>% select(Sex, Age) %>% mutate(Sex=as.numeric(Sex), Age=as.numeric(Age)), R=R)
-    return(data.frame(Data="Adjusted", Method="Dcor", Dataset.Trt=dset.i,
-                      Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.adj$estimate["dCor"],
+    return(data.frame(Data="Adjusted", Method="PDcor", Dataset.Trt=dset.i,
+                      Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.adj$estimate,
                       p.value=test.adj$p.value, Overlap=ov.ij))
   }, error=function(e) {
+    print(e)
     return(NULL)
   })
 }
@@ -230,9 +230,9 @@ site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
     
     # Adjusted Approach. If there is only 1 sex amongst both datasets, omit
     if (length(unique((cov.dat.ij %>% dplyr::select(Sex))$Sex)) == 1) {
-      form <- "Treatment ~ Age"
+      form <- "as.factor(Treatment) ~ Age"
     } else {
-      form <- "Treatment ~ Age + Sex"
+      form <- "as.factor(Treatment) ~ Age + as.factor(Sex)"
     }
     if (unique((cov.dat.ij %>% filter(Dataset == dset.i))$Continent) == unique((cov.dat.ij %>% filter(Dataset == dset.j))$Continent)) {
       result$adj <- adjusted.site_effect(Dmtx.dat.ij, cov.dat.ij, form=form, dset.i=dset.i, dset.j=dset.j, R=R, ov.ij=ov.ij)
