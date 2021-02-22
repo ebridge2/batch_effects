@@ -110,8 +110,8 @@ age.plt <- plot(single.opt %>%
     geom_density_ridges(color="black", jittered_points=TRUE, point_shape="o",
                         alpha=.2, point_size=1, point_alpha=1, 
                         position=position_points_jitter(width=.1, height=.15)) +
-    scale_fill_manual(values=c(`1`="blue", `2`="red"), labels=c(`1`="Male", `2`="Female"), name="Sex") +
-    scale_color_manual(values=c(`1`="blue", `2`="red"), labels=c(`1`="Male", `2`="Female"), name="Sex", aesthetics="point_color") +
+    scale_fill_manual(values=c(`1`="red", `2`="blue"), labels=c(`1`="Female", `2`="Male"), name="Sex") +
+    scale_color_manual(values=c(`1`="red", `2`="blue"), labels=c(`1`="Female", `2`="Male"), name="Sex", aesthetics="point_color") +
     theme_bw() +
     ggtitle("Age Distribution") +
     guides(color=FALSE))
@@ -139,8 +139,8 @@ plt <- (df <- single.opt %>%
     geom_line(color='black') +
     geom_jitter(data=single.opt,
                 aes(x=Age, y=as.numeric(Dataset), color=factor(Sex)), width=.25, height=.2, size=.1, inherit.aes = FALSE) +
-    scale_fill_manual(values=c(`1`="blue", `2`="red"), labels=c(`1`="Male", `2`="Female"), name="Sex") +
-    scale_color_manual(values=c(`1`="blue", `2`="red"), labels=c(`1`="Male", `2`="Female"), name="Sex", aesthetics="color") +
+    scale_fill_manual(values=c(`1`="red", `2`="blue"), labels=c(`1`="Female", `2`="Male"), name="Sex") +
+    scale_color_manual(values=c(`1`="red", `2`="blue"), labels=c(`1`="Female", `2`="Male"), name="Sex", aesthetics="color") +
     scale_y_continuous(breaks=1:length(levels(df$Dataset)),
                        labels=levels(df$Dataset), name="Dataset", expand=c(.02,.02), position="right") +
     geom_blank(data=data.frame(y=c(7.2, 8.8), x=c(20, 20), Continent="Europe", Sex=1, Dataset="BMB1"), aes(x=x, y=y)) +

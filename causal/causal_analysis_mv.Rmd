@@ -98,7 +98,7 @@ plt %>%
   grid.arrange(left=ggpubr::text_grob("Continent",size=25, rot=90))
 ```
 
-```{r, fig.width=8.5, fig.height=5.3}
+```{r, fig.width=8.5, fig.height=2.5}
 graph2df <- function(gr) {
   rownames(gr) <- 1:dim(gr)[1]
   colnames(gr) <- 1:dim(gr)[2]
@@ -116,17 +116,18 @@ get_connectomes_dataset <- function(data, dataset="BNU1") {
         graph2df(data$Raw$Dataset[[dataset]]$Female.Old) %>% mutate(Vara="Female, Old", Dataset=dataset))
 }
 
-rbind(get_connectomes_dataset(results$Stats, dataset="BNU1"),
-      get_connectomes_dataset(results$Stats, dataset="HNU1"),
+rbind(#get_connectomes_dataset(results$Stats, dataset="BNU1"),
+      #get_connectomes_dataset(results$Stats, dataset="HNU1"),
       get_connectomes_dataset(results$Stats, dataset="NYU2")) %>%
   ggplot(aes(x=reorder(Row, Row.mod2), y=reorder(Column, Col.mod2), fill=Value)) +
     geom_tile() +
-    facet_grid(Dataset ~ Vara) +
+    # facet_grid(Dataset ~ Vara) +
+    facet_grid(.~Vara) +
     scale_x_discrete(breaks=c(), name="Parcel") +
     scale_y_discrete(breaks=c(), name="Parcel") +
     theme_bw() +
     scale_fill_gradient(high="#530481", low="#fdf2fe", name="Weight", breaks=c(0, .5, 1), limits=c(0, 1)) +
-    ggtitle("Raw fMRI Connectomes from CoRR Meta-Dataset") +
+    ggtitle("Raw fMRI Connectomes from NYU2 Study") +
     theme(text=element_text(size=15))
 ```
 
@@ -149,7 +150,7 @@ results$Site <- results$Site %>%
          Dataset.Ctrl=factor(Dataset.Ctrl, 
                              levels=dset.ord.site$Dataset, 
                              ordered=TRUE)) %>%
-  mutate(Data=factor(Data, levels=c("Associational", "Causal Obs.", "Causal Exp."), ordered=TRUE))
+  mutate(Data=factor(Data, levels=c("Associational", "Conditional", "Adjusted", "Causal Cross."), ordered=TRUE))
   
 ```
 
@@ -170,12 +171,15 @@ pval_hmap_chart <- function(data, dset.ord.site, title="", method="Raw", text.si
                 by=c("Dataset.Ctrl", "Dataset.Trt", "Method")) %>%
       mutate(has.causal=ifelse(is.na(has.causal), FALSE, TRUE))
   }
+  
   dset.ord.trt <- dset.ord.site %>%
     rename(n.trt=n, Dataset.Trt= Dataset, id.trt=id) %>%
     select(n.trt, Dataset.Trt, id.trt)
   dset.ord.ctrl <- dset.ord.site %>%
     rename(n.ctrl=n, Dataset.Ctrl= Dataset, id.ctrl=id) %>%
     select(n.ctrl, Dataset.Ctrl, id.ctrl)
+  data <- data %>% filter(Data %in% c("Adjusted", "Causal Cross.", "Associational")) %>%
+    filter(!(Data == "Adjusted" & grepl("NKI", Dataset.Trt) & grepl("NKI", Dataset.Ctrl)))
   data <- data %>%
     left_join(dset.ord.trt) %>%
     left_join(dset.ord.ctrl) %>%
@@ -186,8 +190,8 @@ pval_hmap_chart <- function(data, dset.ord.site, title="", method="Raw", text.si
            Dataset.Ctrl.X=c(Dataset.Trt, Dataset.Ctrl)[which.max(c(id.trt, id.ctrl))],
            Dataset.Trt=Dataset.Trt.X, Dataset.Ctrl=Dataset.Ctrl.X,
            Dataset.tmp=as.character(Dataset.Trt),
-           Dataset.Trt=ifelse(grepl("Causal", Data), as.character(Dataset.Ctrl), as.character(Dataset.Trt)),
-           Dataset.Ctrl=ifelse(grepl("Causal", Data), as.character(Dataset.tmp), as.character(Dataset.Ctrl)),
+           Dataset.Trt=ifelse(grepl("Causal|Adjusted", Data), as.character(Dataset.Ctrl), as.character(Dataset.Trt)),
+           Dataset.Ctrl=ifelse(grepl("Causal|Adjusted", Data), as.character(Dataset.tmp), as.character(Dataset.Ctrl)),
            Dataset.Trt=factor(Dataset.Trt,
                               levels=dset.ord.site$Dataset,
                               ordered=TRUE),
@@ -201,13 +205,14 @@ pval_hmap_chart <- function(data, dset.ord.site, title="", method="Raw", text.si
     ylab("Dataset") +
     scale_alpha_continuous(trans=reverselog_trans(10), limits=c(1, .0004), breaks=c(.001, .01, .1, 1), 
                            labels=c(".001", ".01", ".1", "1"), name="p-value") +
-    scale_fill_manual(values=c("Causal Obs."="dark green", "Causal Exp."="purple", "Associational"="red"), 
+    scale_fill_manual(values=c("Adjusted"="cornflowerblue", "Causal Cross."="purple", "Associational"="orange"), 
                       name="Estimated Effect") +
     ggtitle(title) +
     theme_bw() +
     theme(text=element_text(size=text.size), axis.text.x=element_text(angle=90, hjust = 0.95, vjust=.2),
           panel.grid.major=element_blank(),
-          panel.grid.minor = element_blank())
+          panel.grid.minor = element_blank(),
+          legend.position="bottom", legend.direction="horizontal", legend.box="vertical")
 }
 pval_hist_chart <- function(data, nbreaks=30, title="", text.y=.8, method="Raw",
                             text.size=15, preproc=TRUE, p.adjust=.00005) {
@@ -240,13 +245,13 @@ pval_hist_chart <- function(data, nbreaks=30, title="", text.y=.8, method="Raw",
       geom_jitter(data=data.rand, aes(p.value, size=size, group=paste0(Data), y=-3/2*.1, fill=Data,
                       color=Data), width=1000*ggplot2:::resolution(log10(results$Site$p.value), FALSE),
                   height=.1) +
-      facet_grid(".~Data") +
+      facet_grid("Data~.") +
       geom_text(data=data.frame(x=.1, y=text.y/2, Data="Associational", text="$\\alpha$=.05"),
               aes(x=x, y=y, label=TeX(text, output="character")), 
               nudge_x=.2, color='black', parse=TRUE) +
       geom_text(data=sum.n, aes(x=.45, y=text.y, label=text, color=Data), nudge_x=-.15) +
-      scale_fill_manual(values=c("Associational"="red", "Causal Obs."="darkgreen", "Causal Exp."="purple"), name="Estimated Effect") +
-      scale_color_manual(values=c("Associational"="red", "Causal Obs."="darkgreen", "Causal Exp."="purple")) +
+      scale_fill_manual(values=c("Associational"="orange", "Conditional"="blue", "Adjusted"="cornflowerblue", "Causal Cross."="purple"), name="Estimated Effect") +
+      scale_color_manual(values=c("Associational"="orange", "Conditional"="blue", "Adjusted"="cornflowerblue", "Causal Cross."="purple")) +
       scale_x_continuous(expand=c(0, 0), limits=c(.0004, 1), breaks=c(.001, .01, .1, 1),
                          label=c(".001", ".01", ".1", "1"), trans="log10") +
       scale_y_continuous(expand=c(0, 0.03), limits=c(-.25, 1), breaks=c(0, .5, 1)) +
@@ -272,18 +277,19 @@ compare_site <- function(data, dset.ord.site, method="Raw", nbreaks=30, text.y=.
   p.hmap <- pval_hmap_chart(data, dset.ord.site, method=method, title=title.hmap, text.size=text.size)
   p.hist <- pval_hist_chart(data, method=method, nbreaks=nbreaks, title=title.hist,
                             text.y=text.y, text.size=text.size, p.adjust=p.adjust)
-  arrangeGrob(p.hmap, p.hist, heights=c(.7, .25), nrow=2)
+  arrangeGrob(p.hmap, p.hist, widths=c(.6, .6), nrow=1)
 }
 ```
 
-```{r, fig.height=8, fig.width=8}
+```{r, fig.height=7, fig.width=13}
 plot(compare_site(results$Site, dset.ord.site, title.hmap="(A) Estimated Effect per Pair of Datasets",
              title.hist="(B) Empirical Distribution of Estimated Effects"))
 ```
 
 ```{r, fig.height=8, fig.width=9.5}
 results$Site <- results$Site %>%
-  mutate(Method=factor(Method, levels=c("Raw", "ComBat", "Ranked", "Z-Score"), ordered=TRUE))  %>%
+  filter(Method != "ComBat") %>%
+  mutate(Method=factor(Method, levels=c("Raw", "causal ComBat", "Ranked", "Z-Score"), ordered=TRUE))  %>%
   mutate(Data=recode_factor(Data, "Untrimmed"="Associational", "Trimmed"="Causal Obs."))
 
 graph2df_site <- function(gr, dset=NULL, method=NULL) {
@@ -302,12 +308,13 @@ get_site_gr <- function(data, site1="BNU1", site2="SWU4") {
   }))
 }
 
-site1="BNU1"; site2="HNU1"
+site1="MRN1"; site2="IBATRT"
 con.plt <- get_site_gr(results$Stats, site1, site2) %>%
+  filter(Method != "ComBat") %>%
   mutate(Dataset=factor(Dataset, levels=c(site1, site2, 
                                           sprintf("|%s - %s|", site1, site2)),
                         ordered=TRUE),
-         Method=factor(Method, levels=c("Raw", "ComBat", "Ranked", "Z-Score"), ordered=TRUE)) %>%
+         Method=factor(Method, levels=c("Raw", "causal ComBat", "Ranked", "Z-Score"), ordered=TRUE)) %>%
   ggplot(aes(x=reorder(Row, Row.mod2), y=reorder(Column, Col.mod2), fill=Value)) +
   geom_tile() +
   scale_x_discrete(breaks=c(), name="Parcel") +
@@ -323,6 +330,7 @@ con.leg <- get_legend(con.plt); con.plt <- con.plt + guides(fill=FALSE)
 con.plt <- as.ggplot(gtable_filter(ggplotGrob(con.plt), "axis-b-[2,3,4]|axis-l-[2,3]", trim=FALSE, invert=TRUE))
 
 hist.site <- results$Site %>%
+  filter(Method != "ComBat") %>%
   ggplot() +
   geom_histogram(aes(p.value, color=Data, fill=Data,
                          group=paste0(Data, Method),
@@ -335,8 +343,8 @@ hist.site <- results$Site %>%
       geom_text(data=data.frame(x=.05, y=.5, Method="Raw", text="$\\alpha$=.05"),
               aes(x=x, y=y, label=TeX(text, output="character")), 
               nudge_x=.5, color='black', parse=TRUE) +
-      scale_fill_manual(values=c("Associational"="red", "Causal Obs."="darkgreen", "Causal Exp."="purple"), name="Estimated Effect") +
-      scale_color_manual(values=c("Associational"="red", "Causal Obs."="darkgreen", "Causal Exp."="purple"), name="Estimated Effect") +
+      scale_fill_manual(values=c("Associational"="red", "Conditional"="blue", "Adjusted"="cornflowerblue", "Causal Cross."="purple"), name="Estimated Effect") +
+      scale_color_manual(values=c("Associational"="red", "Conditional"="blue", "Adjusted"="cornflowerblue", "Causal Exp."="purple"), name="Estimated Effect") +
       scale_x_continuous(expand=c(0, 0), limits=c(.0004, 1.01), labels=c(".001", ".01", ".1", "1"),
                          breaks=c(.001, .01, .1, 1), trans="log10") +
       scale_y_continuous(expand=c(0, 0.03), limits=c(-.25, 1), breaks=c(0, .5, 1)) +
@@ -368,22 +376,22 @@ results$Covariate <- results$Covariate %>%
 ```
 
 ```{r, fig.height=10, fig.width=13}
-results$Covariate <- results$Covariate %>%
+results.cov <- results$Covariate %>%
   filter(Method != "ComBat") %>%
   mutate(Method=factor(Method, levels=c("Raw", "causal ComBat", "Ranked", "Z-Score"), ordered=TRUE))
 
 
-cov.combt <- results$Covariate %>% filter(Method == "causal ComBat")
-results$Covariate <- rbind(cov.combt, results$Covariate %>% 
-                             filter(Dataset %in% cov.combt$Dataset & Method != "causal ComBat"))
-results.cov <- results$Covariate %>%
+cov.combt <- results.cov %>% filter(Method == "causal ComBat")
+results.cov <- rbind(cov.combt, results.cov %>% 
+                             filter(Method != "ComBat"))
+results.cov <- results.cov %>%
   filter(Method != "Raw") %>%
-  left_join(results$Covariate %>% filter(Method == "Raw") %>% 
+  left_join(results.cov %>% filter(Method == "Raw") %>% 
               select(p.value, Dataset, Effect.Name) %>% rename(p.value.raw=p.value),
             by=c("Dataset", "Effect.Name"))
 ```
 
-```{r, fig.height=10, fig.width=13}
+```{r, fig.height=9.5, fig.width=11}
 graph2df <- function(gr, covar=NULL, lev=NULL, method=NULL) {
   rownames(gr) <- 1:dim(gr)[1]
   colnames(gr) <- 1:dim(gr)[2]
@@ -417,27 +425,32 @@ get_site_gr <- function(data, site="NYU2") {
   }))
 }
 
-site="NYU2"
+site="HNU1"
 con.plt <- get_site_gr(results$Stats, site) %>%
+  mutate(Row.mod2=as.numeric(Row) %% 2, Col.mod2 = as.numeric(Column) %% 2) %>%
   group_by(Level, Covariate, Method) %>%
   mutate(Value=(Value - min(Value))/(max(Value) - min(Value))) %>%
-  ggplot(aes(x=Row, y=reorder(Column, desc(Column)), fill=Value)) +
+  ggplot(aes(x=reorder(Row, Row.mod2), y=reorder(Column, Col.mod2), fill=Value)) +
   geom_tile() +
-  scale_x_discrete(breaks=c("1", "116"), name="Parcel") +
-  scale_y_discrete(breaks=c("1", "116"), name="Parcel") +
+  scale_x_discrete(breaks=c(), name="Parcel") +
+  scale_y_discrete(breaks=c(), name="Parcel") +
   facet_nested(Method ~ Covariate + Level) +
   scale_fill_gradient(high="#530481", low="#fdf2fe", name="Normalized Weight") +
   theme_bw() +
   theme(text=element_text(size=15)) +
-  ggtitle("(A) Conditional Average Connectomes Across NYU2")
+  ggtitle("(A) Conditional Average Connectomes Across HNU1")
 
 con.leg <- get_legend(con.plt); con.plt <- con.plt + guides(fill=FALSE)
 con.plt <- as.ggplot(gtable_filter(ggplotGrob(con.plt), "axis-b-[2,3,4,5,6]|axis-l-[2,3,4]", trim=FALSE, invert=TRUE))
 
-scatter.cov <- ggplot(results.cov %>% slice(sample(1:n()))) +
-  geom_point(aes(x=p.value.raw, y=p.value, color=Effect.Name, shape=Effect.Name), size=2) +
+scatter.cov <- results.cov %>% slice(sample(1:n())) %>%
+  mutate(Cohort=ifelse(Dataset %in% c("SWU4", "HNU1", "BNU3", "SWU1", "BNU2", "IPCAS1",
+                                      "BNU1", "IPCAS6", "IPCAS3", "SWU2", "SWU3", "IPCAS4"),
+                       "Asian", "Other")) %>%
+  ggplot() +
+  geom_point(aes(x=p.value.raw, y=p.value, color=Cohort, shape=Effect.Name), size=2) +
   facet_grid(".~Method") +
-  scale_color_manual(values=c("Age"="blue2", "Sex"="firebrick2"), name="Covariate") +
+  scale_color_manual(values=c("Asian"="orange", "Other"="springgreen4"), name="Cohort") +
   scale_shape(name="Covariate") +
   theme_bw() +
   xlab("p-value Before Adjustment (log)") +
@@ -482,7 +495,7 @@ graph2df <- function(gr, name=NULL, method=NULL) {
            Name=name, Method=method)
 }
 
-get_sig_gr <- function(data, site="BNU1") {
+get_sig_gr <- function(data, site="HNU1") {
   do.call(rbind, lapply(names(data), function(norm) {
     x <- data[[norm]]
     g = x$Dataset[[site]]$Male.Young
@@ -498,8 +511,9 @@ get_sig_gr <- function(data, site="BNU1") {
 }
 
 con.dat <- get_sig_gr(results$Stats) %>%
+  filter(Method != "ComBat") %>%
   mutate(Row.mod2=as.numeric(Row) %% 2, Col.mod2 = as.numeric(Column) %% 2,
-         Method=factor(Method, levels=c("Community", "Raw", "ComBat", "Ranked", "Z-Score"), ordered=TRUE)) %>%
+         Method=factor(Method, levels=c("Community", "Raw", "causal ComBat", "Ranked", "Z-Score"), ordered=TRUE)) %>%
   group_by(Name, Method) %>%
   mutate(Value=(Value - min(Value))/(max(Value) - min(Value)))
 
@@ -529,7 +543,7 @@ con.plt <- arrangeGrob(
   widths=c(.4, .7), top=textGrob("(A) Normalized Connectome, Before and After Adjustment, for a Single Individual", gp=gpar(fontsize=18),
                                  hjust = .66))
 
-get_comm_wts <- function(data, site="NYU2") {
+get_comm_wts <- function(data, site="HNU1") {
   do.call(rbind, lapply(names(data), function(norm) {
     x <- data[[norm]]
     g = x$Dataset[[site]]$Male.Young
@@ -554,12 +568,13 @@ edge.dat <- get_comm_wts(results$Stats) %>%
   filter(Method != "cond. ComBat") %>%
   group_by(Method) %>%
   mutate(Value=(Value - min(Value))/(max(Value) - min(Value)),
-         Method=factor(Method, levels=c("Raw", "ComBat", "Ranked", "Z-Score"), ordered=TRUE),
+         Method=factor(Method, levels=c("Raw", "causal ComBat", "Ranked", "Z-Score"), ordered=TRUE),
          Comm=factor(Comm, levels=c("Homophilic", "non-Homophilic",
                                     "Homotopic", "non-Homotopic"), ordered=TRUE))
 
 edge.dat <- rbind(edge.dat %>% filter(Group == "Homophilic") %>% slice(sample(1:n())),
-                  edge.dat %>% filter(Group == "Homotopic") %>% arrange(desc(Comm)))
+                  edge.dat %>% filter(Group == "Homotopic") %>% arrange(desc(Comm))) %>%
+  filter(Method != "ComBat")
 
 hist.plt <- edge.dat %>% ungroup() %>%
   ggplot() +
@@ -587,15 +602,17 @@ hist.plt <- edge.dat %>% ungroup() %>%
 hist.plt <- as.ggplot(gtable_filter(ggplotGrob(hist.plt), "axis-b-[2,3,4]|axis-l-2", trim=FALSE, invert=TRUE))
 
 plt <- results$Signal %>%
-  filter(Community != "Upper.Tri" & Method != "cond. ComBat") %>%
+  filter(Community != "Upper.Tri" & Method != "ComBat") %>%
+  filter(Dataset %in%  c("SWU4", "HNU1", "BNU3", "SWU1", "BNU2", "IPCAS1",
+                                      "BNU1", "IPCAS6", "IPCAS3", "SWU2", "SWU3", "IPCAS4")) %>%
   mutate(Measure=recode_factor(Community, "Homophilic"="Homophilic Difference", "Homotopic"="Homotopic Difference"),
-         Method=factor(Method, ordered=TRUE, levels=c("Raw", "ComBat", "Z-Score", "Ranked")),
+         Method=factor(Method, ordered=TRUE, levels=c("Raw", "causal ComBat", "Z-Score", "Ranked")),
          p.value=p.adjust(p.value, method="BH")) %>%
   ggplot(aes(p.value, color=Method)) +
   stat_ecdf(aes(linetype=Method), geom="step", size=1.02) +
     facet_grid(". ~ Measure") +
-    scale_color_manual(values = c("Raw"="chartreuse4", "ComBat"="blue", "Z-Score"="red", "Ranked"="darkred")) +
-    scale_linetype_manual(values = c("Raw"="solid", "ComBat"="dashed", "Z-Score"="solid", "Ranked"="solid")) +
+    scale_color_manual(values = c("Raw"="chartreuse4", "causal ComBat"="blue", "Z-Score"="red", "Ranked"="darkred")) +
+    scale_linetype_manual(values = c("Raw"="solid", "causal ComBat"="dashed", "Z-Score"="solid", "Ranked"="solid")) +
     xlab("p-value") +
     scale_x_continuous(limits=c(0, 1), expand=c(0.005,0.005)) +
     scale_y_continuous(limits=c(0, 1), expand=c(0,0.01)) +
