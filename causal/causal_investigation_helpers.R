@@ -11,6 +11,7 @@ require(parallelDist)
 require(sva)
 require(mgcv)
 require(entropy)
+source('./causalComBat.R')
 
 aal.homo.gr <- matrix(0, nrow=116, ncol=116)
 sdiag(aal.homo.gr, k=1) <- rep(c(1, 0), 116/2)[1:(116-1)]
