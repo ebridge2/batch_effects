@@ -110,6 +110,7 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
                               mc.cores=1, R=1000) {
   lapply(norm.options, function(norm) {
     print(norm)
+    cov.post <- cov.dat
     if (norm == "ComBat") {
       dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset))
     } else if (norm == "Z-Score") {
@@ -118,6 +119,9 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
       dat.norm <- apply.along.dataset(gr.dat, cov.dat$Dataset, ptr.batch)
     } else if (norm == "Raw") {
       dat.norm <- gr.dat
+    } else if (norm == "conditional ComBat") {
+      mod <- model.matrix("~as.factor(Sex) + Age", data=cov.dat)
+      dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset, mod=mod))
     } else if (norm == "causal ComBat") {
       # asia.cohort <- which(cov.dat$Dataset %in% c("SWU4", "HNU1", "BNU3", "SWU1", "BNU2", "IPCAS1",
       #                                              "BNU1", "IPCAS6", "IPCAS3", "SWU2", "SWU3", "IPCAS4"))
@@ -128,21 +132,21 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
       # dat.norm <- rbind(norm.asia, norm.am)
       # cov.dat <- rbind(cov.dat[asia.cohort,], cov.dat[am.cohort,])
       
-      asia.cohort <- which(cov.dat$Dataset %in% c("NYU2", "IBATRT", "MRN1", "UWM", "NYU1"))
-      cov.dat <- cov.dat[asia.cohort,]
-      mod=model.matrix(~as.factor(Sex) + as.factor(Age), data=cov.dat)
+      am.cohort <- which(cov.dat$Dataset %in% c("NYU2", "IBATRT", "MRN1", "UWM", "NYU1"))
       
-      dat.norm <- t(ComBat(t(gr.dat[asia.cohort,]), cov.dat$Dataset, mod = mod))
-      
-      gr.dat.full <- gr.dat.full[asia.cohort,]
+      caus.cb <- causal.ComBat(gr.dat[am.cohort,], cov.dat$Dataset[am.cohort], cov.dat[am.cohort,],
+                               '~as.factor(Sex) + Age', exact="Sex")
+      dat.norm <- caus.cb$Data
+      cov.post <- caus.cb$Covariates
+      gr.dat.full <- gr.dat.full[am.cohort[caus.cb$Retained.Ids],]
     }
-    cov.dat <- cov.dat %>% ungroup() %>% mutate(id=row_number())
+    cov.post <- cov.post %>% ungroup() %>% mutate(id=row_number())
     # exhaustively compute full distance matrix once since $$$
     Dmtx.norm <- as.matrix(parDist(dat.norm, threads=ncores))
-    result.site <- causal_ana_site(Dmtx.norm, cov.dat, mc.cores=ncores, R=R)
-    result.cov <- causal_ana_cov(Dmtx.norm, cov.dat, mc.cores=ncores, R=R)
+    result.site <- causal_ana_site(Dmtx.norm, cov.post, mc.cores=ncores, R=R)
+    result.cov <- causal_ana_cov(Dmtx.norm, cov.post, mc.cores=ncores, R=R)
     #result.cov.cont <- causal_ana_cov_cont(Dmtx.norm, cov.dat, mc.cores=ncores)
-    result.signal <- signal_ana(dat.norm, cov.dat, parcellation=parcellation, mc.cores=ncores,
+    result.signal <- signal_ana(dat.norm, cov.post, parcellation=parcellation, mc.cores=ncores,
                                 retain.dims=retain.dims)
     gr.dat.norm <- gr.dat.full
     gr.dat.norm[,retain.dims] <- dat.norm
@@ -153,7 +157,7 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
                 #Covariate.Cont=result.cov.cont %>% mutate(Method=norm),
                 Signal=result.signal %>% mutate(Method=norm),
                 Stats=gr.stats, D=Dmtx.norm, graphs.full=gr.dat.norm,
-                Covariates=cov.dat, dat.norm=dat.norm))
+                Covariates=cov.post, dat.norm=dat.norm))
   })
 }
 

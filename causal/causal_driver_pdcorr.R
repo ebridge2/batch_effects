@@ -113,7 +113,7 @@ retain.dims <- sapply(1:dim(gr.dat.full)[2], function(j) {
 gr.dat <- gr.dat.full[,retain.dims]
 
 R=10000
-norm.options <- c("Raw", "Ranked", "Z-Score", "ComBat", "causal ComBat")
+norm.options <- c("Raw", "Ranked", "Z-Score", "ComBat", "conditional ComBat", "causal ComBat")
 
 results <- singlenorm.driver(gr.dat, gr.dat.full, cov.dat, norm.options=norm.options,
                               parcellation="AAL", retain.dims=retain.dims, mc.cores=mc.cores,
