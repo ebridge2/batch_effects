@@ -29,7 +29,7 @@ balance.batches <- function(batches, covariates, match.form, exact=NULL) {
   covar.tx <- covariates[batches == tx.batch,]
   
   
-  paired.matches <- lapply(batch.names[batch.names != ref.batch], function(batch) {
+  paired.matches <- lapply(batch.names[batch.names != tx.batch], function(batch) {
     covar.cont <- covariates[batches == batch,]
     covariate.match(covar.tx, covar.cont, match.form=match.form, exact=exact)
   })
