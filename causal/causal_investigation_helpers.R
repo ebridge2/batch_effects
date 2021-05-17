@@ -121,7 +121,7 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
     } else if (norm == "Raw") {
       dat.norm <- gr.dat
     } else if (norm == "conditional ComBat") {
-      mod <- model.matrix("~as.factor(Sex) + Age", data=cov.dat)
+      mod <- model.matrix(as.formula("~as.factor(Sex) + Age"), data=cov.dat)
       dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset, mod=mod))
     } else if (norm == "causal ComBat") {
       # asia.cohort <- which(cov.dat$Dataset %in% c("SWU4", "HNU1", "BNU3", "SWU1", "BNU2", "IPCAS1",
@@ -136,7 +136,7 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
       am.cohort <- which(cov.dat$Dataset %in% c("NYU2", "IBATRT", "MRN1", "UWM", "NYU1"))
       
       caus.cb <- causal.ComBat(gr.dat[am.cohort,], cov.dat$Dataset[am.cohort], cov.dat[am.cohort,],
-                               '~as.factor(Sex) + Age', exact="Sex")
+                               'as.factor(Sex) + Age', exact="Sex")
       dat.norm <- caus.cb$Data
       cov.post <- caus.cb$Covariates
       gr.dat.full <- gr.dat.full[am.cohort[caus.cb$Retained.Ids],]

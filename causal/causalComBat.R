@@ -9,15 +9,15 @@
 require(MatchIt)
 require(sva)
 causal.ComBat <- function(X, batches, covariates, match.form, exact=NULL) {
-  retain.ids <- balance.batches(batches, covariates, match.form, exact=exact)
+  retain.ids <- unique(balance.batches(batches, covariates, match.form, exact=exact))
   X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
   
-  mod <- model.matrix(match.form, data=Y.tilde)
+  mod <- model.matrix(as.formula(sprintf("~%s", match.form)), data=Y.tilde)
   dat.norm <- t(ComBat(t(X.tilde), t.tilde, mod = mod))
   return(list(Data=dat.norm,
               Batches=t.tilde,
               Covariates=Y.tilde,
-              Retained.Ids=ret.ids))
+              Retained.Ids=retain.ids))
 }
 
 balance.batches <- function(batches, covariates, match.form, exact=NULL) {
@@ -34,7 +34,7 @@ balance.batches <- function(batches, covariates, match.form, exact=NULL) {
     covariate.match(covar.tx, covar.cont, match.form=match.form, exact=exact)
   })
   
-  I.mat <- which(apply(sapply(paired.matches, function(x) x$I.mat.k), c(1), sum) == 4)
+  I.mat <- which(apply(sapply(paired.matches, function(x) x$I.mat.k), c(1), sum) > 0)
   M.mat <- apply(
     do.call(cbind, lapply(paired.matches, function(x) x$M.mat.k))[I.mat,],
     c(2), sum)
