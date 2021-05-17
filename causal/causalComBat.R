@@ -34,7 +34,7 @@ balance.batches <- function(batches, covariates, match.form, exact=NULL) {
     covariate.match(covar.tx, covar.cont, match.form=match.form, exact=exact)
   })
   
-  I.mat <- which(apply(sapply(paired.matches, function(x) x$I.mat.k), c(1), sum) > 0)
+  I.mat <- which(apply(sapply(paired.matches, function(x) x$I.mat.k), c(1), sum) == 4)
   M.mat <- apply(
     do.call(cbind, lapply(paired.matches, function(x) x$M.mat.k))[I.mat,],
     c(2), sum)
@@ -45,7 +45,7 @@ balance.batches <- function(batches, covariates, match.form, exact=NULL) {
 covariate.match <- function(covar.tx, covar.cont, match.form, exact=NULL) {
   n.kprime <- dim(covar.tx)[1]; n.k <- dim(covar.cont)[1]
   n.matches <- floor(n.k/n.kprime)
-  match <- matchit(formula(sprintf("as.factor(Treatment) %s", match.form)),
+  match <- matchit(formula(sprintf("as.factor(Treatment) ~ %s", match.form)),
                    data=rbind(covar.tx %>% mutate(Treatment = 1),
                               covar.cont %>% mutate(Treatment = 0)),
                    method="nearest", exact=exact, ratio=n.matches, replace=FALSE,
