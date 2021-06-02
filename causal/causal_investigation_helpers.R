@@ -151,7 +151,7 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
                                 retain.dims=retain.dims)
     gr.dat.norm <- gr.dat.full
     gr.dat.norm[,retain.dims] <- dat.norm
-    gr.stats <- sum.stats(gr.dat.norm, cov.dat, n.vertices=n.vertices)
+    gr.stats <- sum.stats(gr.dat.norm, cov.post, n.vertices=n.vertices)
     
     return(list(Site=result.site %>% mutate(Method=norm),
                 Covariate=result.cov %>% mutate(Method=norm),
