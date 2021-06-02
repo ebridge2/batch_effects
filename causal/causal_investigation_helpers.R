@@ -196,6 +196,7 @@ adjusted.site_effect <- function(Dmtx.ij, cov.ij, form="as.factor(Treatment) ~ A
     retain.ids <- as.numeric(names(match.data(match)$weights))
     Dmtx.cmp <- Dmtx.ij.trim[retain.ids, retain.ids]
     cov.dat.cmp <- cov.dat.ij.trim[retain.ids,]
+    ov.ij=compute_overlap(cov.dat.cmp %>% filter(Treatment  == 1), cov.dat.cmp %>% filter(Treatment == 0))
     
     test.adj <- pdcor.test(as.dist(Dmtx.cmp), cov.dat.cmp$Treatment,
                            cov.dat.cmp %>% select(Sex, Age) %>% mutate(Sex=as.numeric(Sex), Age=as.numeric(Age)), R=R)
@@ -256,7 +257,8 @@ site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
 causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
   datasets <- sort(unique((cov.dat %>% dplyr::select(Dataset))$Dataset))
   dset.pairs <- combn(datasets, 2)
-  result <- do.call(rbind, mclapply(1:dim(dset.pairs)[2], function(x) {
+  result <- do.call(rbind, mclapply(36:dim(dset.pairs)[2], function(x) {
+    print(x)
     # get first and second dset
     dset.1 <- dset.pairs[1,x]
     dset.2 <- dset.pairs[2,x]
@@ -275,6 +277,7 @@ causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
       mutate(Treatment = as.numeric(Dataset == dset.i))
     ov.ij=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i), cov.dat.ij %>% filter(Dataset == dset.j))
     Dmtx.dat.ij <- Dmtx.dat[cov.dat.ij$id, cov.dat.ij$id]
+    test=site_pair(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=R)
     return(site_pair(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=R))
   }, mc.cores = mc.cores))
   return(result)
