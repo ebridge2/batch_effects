@@ -257,7 +257,7 @@ site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
 causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
   datasets <- sort(unique((cov.dat %>% dplyr::select(Dataset))$Dataset))
   dset.pairs <- combn(datasets, 2)
-  result <- do.call(rbind, mclapply(36:dim(dset.pairs)[2], function(x) {
+  result <- do.call(rbind, mclapply(1:dim(dset.pairs)[2], function(x) {
     # get first and second dset
     dset.1 <- dset.pairs[1,x]
     dset.2 <- dset.pairs[2,x]
