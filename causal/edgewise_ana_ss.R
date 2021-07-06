@@ -3,6 +3,7 @@ require(energy)
 require(parallel)
 require(tidyverse)
 require(mltools)
+require(data.table)
 ncores <- parallel::detectCores() - 1
 
 cohort <- "CoRR"
@@ -11,9 +12,10 @@ modality <- "fMRI"
 in.file <- sprintf('/base/data/dcorr/inputs_%s_%s_%s.rds', modality, parcellation, cohort)
 preproc <- readRDS(in.file)
 
-methods <- c("Raw", "conditional ComBat", "ComBat", "causal ComBat")
+methods <- c("Raw", "conditional ComBat", "ComBat", "causal ComBat", "conditional NeuroH", "causal NeuroH")
 R <- 10000
 
+preproc.caus <- preproc$`causal ComBat`
 cov.tab <- preproc.caus$covariates
 datasets <- unique(cov.tab$Dataset)
 # get subsets of data corresponding to the subset causal ComBat runs on
@@ -47,6 +49,7 @@ nv <- 116
 Y = preproc.caus$covariates$Sex; Z.caus = preproc.caus$covariates$Age
 DY <- dist(Y); DZ.caus <- dist(Z.caus)
 res <- do.call(rbind, lapply(methods, function(meth) {
+  print(meth)
   if (meth == "Raw") {
     # if Raw, account for dataset in partial DCorr
     Z <- cbind(one_hot(data.table(Dataset=factor(preproc.caus$covariates$Dataset))), Age=Z.caus)
@@ -61,7 +64,9 @@ res <- do.call(rbind, lapply(methods, function(meth) {
     i.coord <- pos2coord(i, dim.mat=c(nv, nv))
     # check if coordinate in upper triangle
     if (i.coord[1] > i.coord[2]) {
-      print(i)
+      if(i %% 1000 == 0) {
+        print(i)
+      }
       DX <- dist(X[,i])
       test <- pdcor.test(DX, DY, DZ, R=R)
       return(data.frame(Row=i.coord[1], Column=i.coord[2], Edge=i, Statistic=test$statistic,

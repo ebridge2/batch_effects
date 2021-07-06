@@ -3,6 +3,7 @@ require(energy)
 require(parallel)
 require(tidyverse)
 require(mltools)
+require(data.table)
 ncores <- parallel::detectCores() - 1
 
 cohort <- "CoRR"
@@ -11,7 +12,7 @@ modality <- "fMRI"
 in.file <- sprintf('/base/data/dcorr/inputs_%s_%s_%s.rds', modality, parcellation, cohort)
 preproc <- readRDS(in.file)
 
-methods <- c("Raw", "conditional ComBat", "ComBat")
+methods <- c("Raw", "conditional ComBat", "ComBat", "conditional NeuroH")
 
 R <- 10000
 datasets <- unique(cov.tab$Dataset)
@@ -35,6 +36,7 @@ pos2coord<-function(pos=NULL, coord=NULL, dim.mat=NULL){
 nv <- 116
 
 res <- do.call(rbind, lapply(methods, function(meth) {
+  print(meth)
   X <- preproc[[meth]]$graphs
   cov.tab <- preproc[[meth]]$covariates
   Y <- cov.tab$Sex
@@ -55,7 +57,9 @@ res <- do.call(rbind, lapply(methods, function(meth) {
     i.coord <- pos2coord(i, dim.mat=c(nv, nv))
     # check if coordinate in upper triangle
     if (i.coord[1] > i.coord[2]) {
-      print(i)
+      if(i %% 1000 == 0) {
+        print(i)
+      }
       DX <- dist(X[,i])
       test <- pdcor.test(DX, DY, DZ, R=R)
       return(data.frame(Row=i.coord[1], Column=i.coord[2], Edge=i, Statistic=test$statistic,
@@ -65,6 +69,6 @@ res <- do.call(rbind, lapply(methods, function(meth) {
       return(NULL)
     }
   }, mc.cores = ncores)) %>% mutate(Method=meth)
-})) %>% mutate(Set="All")
+})) %>% mutate(Set="All", Cohort=cohort)
 
 saveRDS(res, sprintf('../data/dcorr/outputs_edgewise_all_%s.rds', cohort))
