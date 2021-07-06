@@ -219,7 +219,6 @@ adjusted.site_effect <- function(Dmtx.ij, cov.ij, form="as.factor(Treatment) ~ A
                       Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.adj$estimate,
                       p.value=test.adj$p.value, Overlap=ov.ij))
   }, error=function(e) {
-    print(e)
     return(NULL)
   })
 }
@@ -261,7 +260,6 @@ site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
     return(do.call(rbind, result) %>%
              mutate(Effect.Name="Site"))
   }, error=function(e) {
-    print(e)
     return(data.frame(Data=c("Associational", "Causal Obs."), Method="PDcor", Dataset.Trt=dset.i,
               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=NA, p.value=NA,
               Overlap=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i),
@@ -360,7 +358,6 @@ causal_ana_cov <- function(Dmtx.dat, cov.dat, nboots=100, R=1000, mc.cores=1) {
 
       return(res)
     }, error=function(e) {
-      print(e)
       return(NULL)
     })
 
