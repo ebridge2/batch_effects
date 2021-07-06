@@ -36,17 +36,21 @@ SUBID,SITE,SESSION,SEX,AGE_AT_SCAN_1,HANDEDNESS,RETEST_DESIGN,RETEST_DURATION,RE
 ...
 ```
 
-The key to be aware of is Male = 2 and Female = 1 for the SEX column.
+The key to be aware of is Male = 2 and Female = 1 for the SEX column. 
 
 # Usage
 
 1. Clone this repo locally, to `<repo>/<dir>`.
-2. Change the following lines:
+
+2. Change the following lines of the file `causal_driver_pdcorr.R`:
 
 ```
-
-datasets <- c("<batch-1>", "<batch-2>", ...) # whatever batch names you want to include
+# Line 23
 pheno.name <- "<pheno-name>"
+# Line 28
+cohort <- "ABCD"
+#Line 31
+datasets <- c("<batch-1>", "<batch-2>", ...) # whatever batch names you want to include
 ```
 
 and possibly more depending on whether you did the graph reading/phenotypic data reading step using my code.
@@ -57,7 +61,9 @@ and possibly more depending on whether you did the graph reading/phenotypic data
 docker run -ti --entrypoint /bin/bash -v /<inputs>/<dir>/:/data -v /<repo>/<dir>/batch_effects/:/base neurodata/batch_effects:0.0.2
 ```
 
-4. cd and run scripts sequentially:
+4. Be aware that the parsed covariate data should be in 1:1 order with the associated graphs. You can verify this by manually copying/pasting the first 122 lines of code from `causal_driver_pdcorr.R` into the terminal session, and ensuring manually that the object `cov.dat` has the subject/session/datasets organized properly. `cov.dat[1,]` should correspond to `gr.dat[1,]` and vice-versa for both objects. If this is not the case, the result will be nonsensical. I would check this manually (literally checking the split name of the output graph in `gr.dat[1,]` which is found in `spl.names[[1]]` and making sure the covariates are correct in `cov.dat[1,]`). I say this because I've never used this for anything but CoRR and this would be the most catastrophic failure that could potentially occur and go unnoticed if we aren't careful.
+
+5. cd and run scripts sequentially:
 
 ```
 cd /base/causal/
