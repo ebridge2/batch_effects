@@ -96,4 +96,4 @@ Or by copying and pasting the lines of each file into the terminal directly. I t
 
 The second to last script takes about 3 hours on 40 cores with about 300 connectomes in the overlapping region, and the latter took somewhere around 7 days on 40 cores, with 3500 connectomes. You will need a distance matrix for each of the 116*(115)/2 features of the AAL connectomes, for n subjects, and the distance matrix has rooughly quadratic complexity, so if there are more than 3500 connectomes, I would expect fairly crazy runtimes. If this is the case we should talk about how to speed it up because I was not shooting for efficiency, but if there are like anywhere near 10k subjects in ABCD we might want to explore that.
 
-5. Send me the files `pdcorr_outputs_fMRI_AAL.rds` and `outputs_edgewise_ss.rds` and `outputs_edgewise_all.rds` which will be in the directory `<repo-dir>/batch_effects/data/dcorr/`.
+7. Send me the files `pdcorr_outputs_fMRI_AAL.rds` and `outputs_edgewise_ss.rds` and `outputs_edgewise_all.rds` which will be in the directory `<repo-dir>/batch_effects/data/dcorr/`.
