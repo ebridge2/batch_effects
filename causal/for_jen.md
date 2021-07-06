@@ -4,6 +4,10 @@
 
 You will want version 0.0.2.
 
+```
+docker pull neurodata/batch_effects:0.0.2
+```
+
 # Requirements
 
 1. Connectomes stored as edge lists, with the following file organization:
