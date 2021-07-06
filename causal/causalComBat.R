@@ -20,6 +20,18 @@ causal.ComBat <- function(X, batches, covariates, match.form, exact=NULL) {
               Retained.Ids=retain.ids))
 }
 
+causal.NeuroH <- function(X, batches, covariates, match.form, exact=NULL) {
+  retain.ids <- unique(balance.batches(batches, covariates, match.form, exact=exact))
+  X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
+  
+  covars <- data.frame(SITE=t.tilde, AGE=Y.tilde$Age, SEX_M=as.numeric(Y.tilde$Sex == 2))
+  dat.norm <- neuroharm(X.tilde, covars)
+  return(list(Data=dat.norm,
+              Batches=t.tilde,
+              Covariates=Y.tilde,
+              Retained.Ids=retain.ids))
+}
+
 balance.batches <- function(batches, covariates, match.form, exact=NULL) {
   # obtain the smallest batch
   batch.sum <- batches %>% table()
