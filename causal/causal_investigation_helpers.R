@@ -13,6 +13,11 @@ require(mgcv)
 require(entropy)
 source('./causalComBat.R')
 
+use_virtualenv("/opt/neuroharm/", required=TRUE)
+py_config()
+neuroharm <- import("neuroHarmonize")
+
+
 aal.homo.gr <- matrix(0, nrow=116, ncol=116)
 sdiag(aal.homo.gr, k=1) <- rep(c(1, 0), 116/2)[1:(116-1)]
 sdiag(aal.homo.gr, k=-1) <- rep(c(1, 0), 116/2)[1:(116-1)]
@@ -49,7 +54,6 @@ tri.gr[upper.tri(tri.gr)] <- 1
 des.comm <- list(Homotopic=des.homo.gr, Homophilic=des.hetero.gr, Upper.Tri=tri.gr)
 
 parcel.comm <- list(AAL=aal.comm, Desikan=des.comm)
-
 
 pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as.vector(diag(116)) != 1),
                             mc.cores=1, R=1000) {
@@ -108,7 +112,7 @@ pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as
 singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
                               norm.options = c("Raw", "Ranked", "Z-Score", "ComBat", "causal ComBat"),
                               parcellation="AAL", retain.dims=(as.vector(diag(116)) != 1),
-                              mc.cores=1, R=1000) {
+                              mc.cores=1, R=1000, clique=NULL) {
   lapply(norm.options, function(norm) {
     print(norm)
     cov.post <- cov.dat
@@ -123,23 +127,34 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
     } else if (norm == "conditional ComBat") {
       mod <- model.matrix(as.formula("~as.factor(Sex) + Age"), data=cov.dat)
       dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset, mod=mod))
+    } else if (norm == "conditional NeuroH") {
+      cov.nh <- data.frame(SITE=cov.dat$Dataset, AGE=cov.dat$Age, SEX_M=as.numeric(cov.dat$Sex == 2))
+      dat.norm <- neuroharm$harmonizationLearn(gr.dat, cov.nh)[[2]]
     } else if (norm == "causal ComBat") {
-      # asia.cohort <- which(cov.dat$Dataset %in% c("SWU4", "HNU1", "BNU3", "SWU1", "BNU2", "IPCAS1",
+      # asia.clique <- which(cov.dat$Dataset %in% c("SWU4", "HNU1", "BNU3", "SWU1", "BNU2", "IPCAS1",
       #                                              "BNU1", "IPCAS6", "IPCAS3", "SWU2", "SWU3", "IPCAS4"))
-      # am.cohort <- which(cov.dat$Dataset %in% c("NKI24tr645", "NKI24tr1400", "NKI24tr2500", "NYU1", "UWM",
+      # am.clique <- which(cov.dat$Dataset %in% c("NKI24tr645", "NKI24tr1400", "NKI24tr2500", "NYU1", "UWM",
       #                                           "Utah1", "MRN1", "IBATRT", "NYU2"))
-      # norm.asia <- t(ComBat(t(gr.dat[asia.cohort,]), cov.dat$Dataset[asia.cohort]))
-      # norm.am <- t(ComBat(t(gr.dat[am.cohort,]), cov.dat$Dataset[am.cohort]))
+      # norm.asia <- t(ComBat(t(gr.dat[asia.clique,]), cov.dat$Dataset[asia.clique]))
+      # norm.am <- t(ComBat(t(gr.dat[am.clique,]), cov.dat$Dataset[am.clique]))
       # dat.norm <- rbind(norm.asia, norm.am)
-      # cov.dat <- rbind(cov.dat[asia.cohort,], cov.dat[am.cohort,])
+      # cov.dat <- rbind(cov.dat[asia.clique,], cov.dat[am.clique,])
       
-      am.cohort <- which(cov.dat$Dataset %in% c("NYU2", "IBATRT", "MRN1", "UWM", "NYU1"))
+      idx.clique <- which(cov.dat$Dataset %in% clique)
       
-      caus.cb <- causal.ComBat(gr.dat[am.cohort,], cov.dat$Dataset[am.cohort], cov.dat[am.cohort,],
+      caus.cb <- causal.ComBat(gr.dat[idx.clique,], cov.dat$Dataset[idx.clique], cov.dat[idx.clique,],
                                'as.factor(Sex) + Age', exact="Sex")
       dat.norm <- caus.cb$Data
       cov.post <- caus.cb$Covariates
-      gr.dat.full <- gr.dat.full[am.cohort[caus.cb$Retained.Ids],]
+      gr.dat.full <- gr.dat.full[idx.clique[caus.cb$Retained.Ids],]
+    } else if (norm == "causal NeuroH") {
+      idx.clique <- which(cov.dat$Dataset %in% clique)
+      
+      caus.nh <- causal.NeuroH(gr.dat[idx.clique,], cov.dat$Dataset[idx.clique], cov.dat[idx.clique,],
+                               'as.factor(Sex) + Age', exact="Sex")
+      dat.norm <- caus.nh$Data
+      cov.post <- caus.nh$Covariates
+      gr.dat.full <- gr.dat.full[idx.clique[caus.nh$Retained.Ids],]
     }
     cov.post <- cov.post %>% ungroup() %>% mutate(id=row_number())
     # exhaustively compute full distance matrix once since $$$
@@ -158,7 +173,7 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
                 #Covariate.Cont=result.cov.cont %>% mutate(Method=norm),
                 Signal=result.signal %>% mutate(Method=norm),
                 Stats=gr.stats, D=Dmtx.norm, graphs.full=gr.dat.norm,
-                Covariates=cov.post, dat.norm=dat.norm))
+                Covariates=cov.post %>% mutate(Method=norm), dat.norm=dat.norm))
   })
 }
 

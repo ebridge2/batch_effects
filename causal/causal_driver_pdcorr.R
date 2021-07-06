@@ -13,15 +13,22 @@ require(parallelDist)
 require(sva)
 require(mgcv)
 require(entropy)
+require(reticulate)
 source('./causal_investigation_helpers.R')
+
 
 select <- dplyr::select
 in.path <- '/data/'
 n.vertices <- 116
-pheno.path <- file.path(in.path, 'phenotypic/CoRR_AggregatedPhenotypicData.csv')
+pheno.name <- "CoRR_AggregatedPhenotypicData"
+pheno.path <- file.path(in.path, sprintf('phenotypic/%s.csv', pheno.name))
 ncores <- detectCores() - 1
 parcellation <- "AAL"
 modality <- "fMRI"
+cohort <- "CoRR"
+am.clique <- c("NYU2", "IBATRT", "MRN1", "UWM", "NYU1")
+#as.clique <- c("SWU4", "HNU1", "BNU3", "SWU1", "BNU2", "IPCAS1", "BNU1", "IPCAS6", "IPCAS3", "SWU2", "IPCAS4")
+
 mri.path <- file.path(in.path, modality, parcellation)
 
 datasets=c("UWM", "NYU1", "Utah1", "MRN1", "IBATRT", "UPSM1", "NYU2",
@@ -113,11 +120,12 @@ retain.dims <- sapply(1:dim(gr.dat.full)[2], function(j) {
 gr.dat <- gr.dat.full[,retain.dims]
 
 R=10000
-norm.options <- c("Raw", "Ranked", "Z-Score", "ComBat", "conditional ComBat", "causal ComBat")
+norm.options <- c("Raw", "Ranked", "Z-Score", "ComBat", "conditional ComBat", "causal ComBat",
+                  "conditional NeuroH", "causal NeuroH")
 
 results <- singlenorm.driver(gr.dat, gr.dat.full, cov.dat, norm.options=norm.options,
                               parcellation="AAL", retain.dims=retain.dims, mc.cores=mc.cores,
-                              R=R)
+                              R=R, clique=am.clique)
 
 gr.stats <- lapply(results, function(res) res$Stats)
 names(gr.stats) <- norm.options
@@ -130,10 +138,10 @@ result.cov <- do.call(rbind, lapply(results, function(res) res$Covariate)) %>%
 result.signal <- do.call(rbind, lapply(results, function(res) res$Signal)) %>%
   mutate(Modality=modality)
 
-preproc.obj <- lapply(results, function(res) {return(list(D=res$D, graphs=res$graphs.full))})
+preproc.obj <- lapply(results, function(res) {return(list(D=res$D, graphs=res$graphs.full, covariates=res$Covariates, Cohort=cohort))})
 names(preproc.obj) <- norm.options
 
-saveRDS(list(Site=result.site, Covariate=result.cov, #Covariate.Cont=result.cov.cont,
-             Signal=result.signal, Stats=gr.stats, Covar.Tbl=cov.dat),
-        file=sprintf('/base/data/dcorr/pdcorr_outputs_%s_%s.rds', modality, parcellation))
-saveRDS(preproc.obj, file=sprintf('/base/data/dcorr/inputs_%s_%s.rds', modality, parcellation))
+saveRDS(list(Site=result.site %>% mutate(Cohort=cohort), Covariate=result.cov %>% mutate(Cohort=cohort), #Covariate.Cont=result.cov.cont,
+             Signal=result.signal %>% mutate(Cohort=cohort), Stats=gr.stats, Covar.Tbl=cov.dat %>% mutate(Cohort=cohort), Cohort=cohort),
+        file=sprintf('/base/data/dcorr/pdcorr_outputs_%s_%s_%s.rds', modality, parcellation, cohort))
+saveRDS(preproc.obj, file=sprintf('/base/data/dcorr/inputs_%s_%s_%s.rds', modality, parcellation, cohort))

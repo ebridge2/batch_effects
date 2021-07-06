@@ -8,6 +8,10 @@
 #
 require(MatchIt)
 require(sva)
+use_virtualenv("/opt/neuroharm/", required=TRUE)
+py_config()
+neuroharm <- import("neuroHarmonize")
+
 causal.ComBat <- function(X, batches, covariates, match.form, exact=NULL) {
   retain.ids <- unique(balance.batches(batches, covariates, match.form, exact=exact))
   X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
@@ -25,7 +29,7 @@ causal.NeuroH <- function(X, batches, covariates, match.form, exact=NULL) {
   X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
   
   covars <- data.frame(SITE=t.tilde, AGE=Y.tilde$Age, SEX_M=as.numeric(Y.tilde$Sex == 2))
-  dat.norm <- neuroharm(X.tilde, covars)
+  dat.norm <- neuroharm$harmonizationLearn(X.tilde, covars)[[2]]
   return(list(Data=dat.norm,
               Batches=t.tilde,
               Covariates=Y.tilde,
