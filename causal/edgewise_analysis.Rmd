@@ -148,11 +148,12 @@ res <- do.call(rbind, lapply(methods, function(meth) {
 saveRDS(res, '../data/dcorr/outputs_edgewise_all.rds')
 ```
 
+
 ```{r}
-meth.ord <- c("Raw", "ComBat", "conditional ComBat", "causal ComBat")
+meth.ord <- c("Raw", "ComBat", "conditional ComBat", "conditional NeuroH", "causal ComBat", "causal NeuroH")
 row.ord <- c("All", "Causal Subset")
-outputs <- readRDS('../data/dcorr/outputs_edgewise_ss.rds') %>%
-  # rbind(readRDS('../data/dcorr/outputs_edgewise_all.rds')) %>%
+outputs <- readRDS('../data/dcorr/outputs_edgewise_ss_CoRR.rds') %>%
+  rbind(readRDS('../data/dcorr/outputs_edgewise_all_CoRR.rds')) %>%
   mutate(Method=factor(Method, levels=meth.ord, ordered = TRUE),
          Set=factor(Set, levels=row.ord, ordered=TRUE)) %>%
   ungroup() %>%
@@ -213,7 +214,7 @@ plt <- outputs %>%
   ggtitle("Comparison of Significant Edges based on Correction Technique") +
   scale_x_discrete(breaks=c(1, 116), name="Parcel") +
   scale_y_discrete(breaks=c(1, 116), name="Parcel") +
-  facet_grid(".~Method") +
+  facet_grid("Set~Method") +
   theme_bw()
 
 plt <- ggplotGrob(plt)

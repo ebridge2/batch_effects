@@ -1,0 +1,113 @@
+---
+title: "Explore Balancing"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+require(tidyverse)
+source('../causal/causalComBat.R')
+
+```
+
+```{r}
+results <- readRDS('../data/dcorr/pdcorr_outputs_fMRI_AAL.rds')
+
+covariates <- results$Covar.Tbl
+
+batches <- covariates$Dataset
+
+cohort <- c("SWU4", "HNU1", "BNU3", "BNU2", "SWU1", "IPCAS1", "BNU1", "IPCAS6", "IPCAS3", "SWU2", "IPCAS4")
+asia.cohort <- which(batches %in% cohort)
+
+covariates <- covariates[asia.cohort,]; batches <- batches[asia.cohort]
+```
+
+```{r}
+overlap_dist <- function(X) {
+  datasets = unique(X$Dataset)
+  D=sapply(unique(X$Dataset), function(dataseti) {
+    sapply(unique(X$Dataset), function(datasetj) {
+      suppressMessages(
+        compute_overlap(X %>% filter(Dataset == dataseti) %>% ungroup(), 
+                        X %>% filter(Dataset == datasetj) %>% ungroup()))
+    })
+  })
+  colnames(D) <- rownames(D) <- unique(X$Dataset)
+  data.frame(Dataset1=colnames(D)[col(D)], Dataset2=rownames(D)[row(D)],
+             Overlap=c(D)) %>%
+    mutate(Dataset1=factor(Dataset1, levels=unique(X$Dataset), ordered=TRUE),
+           Dataset2=factor(Dataset2, levels=unique(X$Dataset), ordered=TRUE)) %>%
+    arrange(Dataset1, Dataset2)
+}
+compute_overlap <- function(X1, X2) {
+  # probability of drawing two individuals with the same sex
+  X1.sex <- X1 %>%
+     group_by(Sex) %>%
+     summarize(Per=n(), .groups="keep") %>%
+     ungroup() %>%
+     mutate(Per=Per/sum(Per))
+  X2.sex <- X2 %>%
+     group_by(Sex) %>%
+     summarize(Per=n(), .groups="keep") %>%
+     ungroup() %>%
+     mutate(Per=Per/sum(Per))
+  range.age <- c(min(X1$Age, X2$Age), max(X1$Age, X2$Age))
+  per.ov <- sum(sapply(1:2, function(sex) {
+    tryCatch({
+    ov.sex <- pmin((X1.sex %>% filter(Sex == sex))$Per, (X2.sex %>% filter(Sex == sex))$Per)
+    X1.sex.age <- (X1 %>% filter(Sex == sex) %>% select(Age))$Age
+    X2.sex.age <- (X2 %>% filter(Sex == sex) %>% select(Age))$Age
+    # obtain pdf for age
+    X1.dens <- density(as.numeric(X1.sex.age), from=min(range.age), to=max(range.age))
+    X1.dens$y <- X1.dens$y/sum(X1.dens$y)
+    X2.dens <- density(as.numeric(X2.sex.age), from=min(range.age), to=max(range.age))
+    X2.dens$y <- X2.dens$y/sum(X2.dens$y)
+    ov.sex.age <- sum(pmin(X1.dens$y, X2.dens$y))
+    return(ov.sex*ov.sex.age)
+    }, error=function(e) {return(0)})
+  }))
+  return(as.numeric(unique((X1$Continent)) == unique(X2$Continent))*per.ov)
+}
+```
+
+
+```{r}
+overlap.D=covariates %>%
+  group_by(Dataset) %>%
+  select(Dataset, Continent, Sex, Age) %>%
+  {do.call(overlap_dist, list(X=(.)))}
+
+min.val <- min(overlap.D$Overlap - .01)
+overlap.D %>%
+  ggplot(aes(x=Dataset1, y=Dataset2, fill=Overlap)) +
+    geom_tile() +
+    theme_bw() +
+    scale_fill_gradient(low="white", high="#33007b", limits=c(min.val, 1)) +
+    ggtitle("Estimate of Overlap of Empirical Distributions, Before") +
+    guides(color=FALSE) +
+    theme(axis.text.x=element_text(angle=90))
+```
+
+```{r}
+retain.ids <- balance.batches(batches, covariates, "as.factor(Sex) + Age", exact="Sex")
+Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
+
+
+overlap.D=Y.tilde %>%
+  group_by(Dataset) %>%
+  select(Dataset, Continent, Sex, Age) %>%
+  {do.call(overlap_dist, list(X=(.)))}
+
+overlap.D %>%
+  ggplot(aes(x=Dataset1, y=Dataset2, fill=Overlap)) +
+    geom_tile() +
+    theme_bw() +
+    scale_fill_gradient(low="white", high="#33007b", limits=c(min.val, 1)) +
+    ggtitle("Estimate of Overlap of Empirical Distributions, After") +
+    guides(color=FALSE) +
+    theme(axis.text.x=element_text(angle=90))
+```
