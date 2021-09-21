@@ -8,6 +8,7 @@
 #
 require(MatchIt)
 require(sva)
+require(reticulate)
 use_virtualenv("/opt/neuroharm/", required=TRUE)
 py_config()
 neuroharm <- import("neuroHarmonize")

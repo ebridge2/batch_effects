@@ -10,17 +10,37 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 require(tidyverse)
 source('../causal/causalComBat.R')
-
 ```
 
 ```{r}
+select <- dplyr::select; mutate <- dplyr::mutate; arrange=dplyr::arrange
 results <- readRDS('../data/dcorr/pdcorr_outputs_fMRI_AAL.rds')
+
+continent <- c("IBATRT"="North America", "Utah1"="North America", "IPCAS2"="Asia",
+               "SWU1"="Asia", "UWM"="North America", "XHCUMS"="Asia", "SWU4"="Asia",
+               "BNU2"="Asia", "IPCAS3"="Asia", "SWU3"="Asia", "IPCAS4"="Asia",
+               "NYU2"="North America", "IPCAS1"="Asia",
+               "IPCAS7"="Asia", "UPSM1"="North America", "IACAS1"="Asia", "IPCAS5"="Asia", 
+               "NYU1"="North America", "NYU2"="North America", "BNU1"="Asia",
+               "MRN1"="North America", "BNU3"="Asia", "HNU1"="Asia", "SWU2"="Asia",
+               "IPCAS8"="Asia", "JHNU"="Asia", "IPCAS6"="Asia",
+               "BMB1"="Europe", "NKI24tr645"="North America", 
+               "NKI24tr1400"="North America", "NKI24tr2500"="North America")
+results$Covariate$Continent <- continent[results$Covariate$Dataset]
+cohort <- c("NYU2", "IBATRT", "MRN1", "UWM", "NYU1")
+
+dset.ord <- results$Covariate %>%
+  filter(Method == "Raw" & Dataset %in% cohort) %>%
+  dplyr::select(Dataset, Continent, n, N) %>%
+  distinct() %>%
+  arrange(Continent, N) %>%
+  mutate(id=row_number()) %>%
+  mutate(Dataset.Newname=sub("_", "", Dataset))
 
 covariates <- results$Covar.Tbl
 
 batches <- covariates$Dataset
 
-cohort <- c("SWU4", "HNU1", "BNU3", "BNU2", "SWU1", "IPCAS1", "BNU1", "IPCAS6", "IPCAS3", "SWU2", "IPCAS4")
 asia.cohort <- which(batches %in% cohort)
 
 covariates <- covariates[asia.cohort,]; batches <- batches[asia.cohort]
@@ -82,14 +102,58 @@ overlap.D=covariates %>%
   {do.call(overlap_dist, list(X=(.)))}
 
 min.val <- min(overlap.D$Overlap - .01)
-overlap.D %>%
+ov.bef <- overlap.D %>%
+  mutate(Dataset1=factor(Dataset1, levels=dset.ord$Dataset, ordered=TRUE),
+         Dataset2=factor(Dataset2, levels=dset.ord$Dataset, ordered=TRUE)) %>%
   ggplot(aes(x=Dataset1, y=Dataset2, fill=Overlap)) +
     geom_tile() +
     theme_bw() +
     scale_fill_gradient(low="white", high="#33007b", limits=c(min.val, 1)) +
-    ggtitle("Estimate of Overlap of Empirical Distributions, Before") +
+    ggtitle("(A.II) Overlap of Empirical Distributions, Before") +
     guides(color=FALSE) +
     theme(axis.text.x=element_text(angle=90))
+```
+
+```{r}
+get_scaled_densities <- function(x, bw=1.58) {
+  res <- density(x, bw=bw)
+  return(data.frame(x=res$x, y=res$y/max(res$y)*length(x)))
+}
+covar.reord <- covariates %>%
+  filter(!(Dataset %in% c("NKI24tr645", "NKI24tr1400"))) %>%
+  mutate(Dataset=recode_factor(Dataset, "NKI24tr2500"="NKI24")) %>%
+  mutate(Dataset=factor(Dataset, levels=(dset.ord %>%
+  filter(!(Dataset %in% c("NKI24tr645", "NKI24tr1400"))) %>%
+  mutate(Dataset=recode_factor(Dataset, "NKI24tr2500"="NKI24")))$Dataset, ordered=TRUE)) %>%
+  group_by(Subid, Dataset) %>%
+  arrange(desc(Session)) %>%
+  do(head(., 1))
+
+covar.bef <- (df <- covar.reord %>%
+  group_by(Dataset, Sex, Continent) %>%
+  do(get_scaled_densities(.$Age)) %>%
+  ungroup() %>%
+  mutate(y=y/max(y) + as.numeric(Dataset))) %>%
+  ggplot(aes(ymin=as.numeric(Dataset), group=paste0(Dataset, Sex),
+             color=factor(Sex), fill=factor(Sex), x=x, y=y, ymax=y)) +
+    geom_ribbon(alpha=.2) +
+    geom_line(color='black') +
+    geom_jitter(data=covar.reord,
+                aes(x=Age, y=as.numeric(Dataset), color=factor(Sex)), width=.25, height=.2, size=.1, inherit.aes = FALSE) +
+    scale_fill_manual(values=c(`1`="red", `2`="blue"), labels=c(`1`="Female", `2`="Male"), name="Sex") +
+    scale_color_manual(values=c(`1`="red", `2`="blue"), labels=c(`1`="Female", `2`="Male"), name="Sex", aesthetics="color") +
+    scale_y_continuous(breaks=1:length(levels(df$Dataset)),
+                       labels=levels(df$Dataset), name="Dataset", expand=c(.02,.02), position="right") +
+    xlab("Age") +
+    theme_bw() +
+    ggtitle("(A.I) Covariate Densities, Before") +
+    facet_grid("Continent~.", scales="free_y", space="free_y", switch="y") +
+    theme(panel.grid.minor = element_blank())
+
+covar.bef = covar.bef %>%
+  grid.arrange(left=ggpubr::text_grob("Continent", rot=90))
+
+covar.bef
 ```
 
 ```{r}
@@ -102,12 +166,57 @@ overlap.D=Y.tilde %>%
   select(Dataset, Continent, Sex, Age) %>%
   {do.call(overlap_dist, list(X=(.)))}
 
-overlap.D %>%
+ov.aft <- overlap.D %>%
+  mutate(Dataset1=factor(Dataset1, levels=dset.ord$Dataset, ordered=TRUE),
+         Dataset2=factor(Dataset2, levels=dset.ord$Dataset, ordered=TRUE)) %>%
   ggplot(aes(x=Dataset1, y=Dataset2, fill=Overlap)) +
     geom_tile() +
     theme_bw() +
     scale_fill_gradient(low="white", high="#33007b", limits=c(min.val, 1)) +
-    ggtitle("Estimate of Overlap of Empirical Distributions, After") +
+    ggtitle("(B.II) Overlap of Empirical Distributions, After") +
     guides(color=FALSE) +
     theme(axis.text.x=element_text(angle=90))
+```
+
+```{r}
+covar.reord <- Y.tilde %>%
+  filter(!(Dataset %in% c("NKI24tr645", "NKI24tr1400"))) %>%
+  mutate(Dataset=recode_factor(Dataset, "NKI24tr2500"="NKI24")) %>%
+  mutate(Dataset=factor(Dataset, levels=(dset.ord %>%
+  filter(!(Dataset %in% c("NKI24tr645", "NKI24tr1400"))) %>%
+  mutate(Dataset=recode_factor(Dataset, "NKI24tr2500"="NKI24")))$Dataset, ordered=TRUE)) %>%
+  group_by(Subid, Dataset) %>%
+  arrange(desc(Session)) %>%
+  do(head(., 1))
+
+covar.aft <- (df <- covar.reord %>%
+  group_by(Dataset, Sex, Continent) %>%
+  do(get_scaled_densities(.$Age)) %>%
+  ungroup() %>%
+  mutate(y=y/max(y) + as.numeric(Dataset))) %>%
+  ggplot(aes(ymin=as.numeric(Dataset), group=paste0(Dataset, Sex),
+             color=factor(Sex), fill=factor(Sex), x=x, y=y, ymax=y)) +
+    geom_ribbon(alpha=.2) +
+    geom_line(color='black') +
+    geom_jitter(data=covar.reord,
+                aes(x=Age, y=as.numeric(Dataset), color=factor(Sex)), width=.25, height=.2, size=.1, inherit.aes = FALSE) +
+    scale_fill_manual(values=c(`1`="red", `2`="blue"), labels=c(`1`="Female", `2`="Male"), name="Sex") +
+    scale_color_manual(values=c(`1`="red", `2`="blue"), labels=c(`1`="Female", `2`="Male"), name="Sex", aesthetics="color") +
+    scale_y_continuous(breaks=1:length(levels(df$Dataset)),
+                       labels=levels(df$Dataset), name="Dataset", expand=c(.02,.02), position="right") +
+    xlab("Age") +
+    theme_bw() +
+    ggtitle("(B.I) Covariate Densities, After") +
+    facet_grid("Continent~.", scales="free_y", space="free_y", switch="y") +
+    theme(panel.grid.minor = element_blank())
+
+covar.aft = covar.aft %>%
+  grid.arrange(left=ggpubr::text_grob("Continent", rot=90))
+
+covar.aft
+
+```
+
+```{r, fig.width=11.5, fig.height=7.5}
+grid.arrange(arrangeGrob(covar.bef, ov.bef, widths=c(3,2)), arrangeGrob(covar.aft, ov.aft, widths=c(3,2)), heights=c(1,1))
 ```

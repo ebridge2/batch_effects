@@ -32,7 +32,6 @@ require(scales)
 require(ggh4x)
 require(cowplot)
 source('./causal_investigation_helpers.R')
-select <- dplyr::select; mutate <- dplyr::mutate; arrange=dplyr::arrange
 ```
 
 # Modality {.tabset}
@@ -40,6 +39,7 @@ select <- dplyr::select; mutate <- dplyr::mutate; arrange=dplyr::arrange
 ## fMRI {.tabset}
 
 ```{r}
+select <- dplyr::select; mutate <- dplyr::mutate; arrange=dplyr::arrange
 results <- readRDS('../data/dcorr/pdcorr_outputs_fMRI_AAL.rds')
 
 continent <- c("IBATRT"="North America", "Utah1"="North America", "IPCAS2"="Asia",

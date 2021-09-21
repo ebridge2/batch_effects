@@ -44,7 +44,7 @@ res <- do.call(rbind, lapply(methods, function(meth) {
   Z <- cov.tab$Age
   if (meth == "Raw") {
     # if Raw, account for dataset in partial DCorr
-    Z <- cbind(one_hot(data.table(Dataset=factor(preproc.caus$covariates$Dataset))),
+    Z <- cbind(one_hot(data.table(Dataset=factor(cov.tab$Dataset))),
                Age=Z)
     Z.sc <- scale(Z)
     DZ <- dist(Z.sc)
