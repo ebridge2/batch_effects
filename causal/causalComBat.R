@@ -8,12 +8,9 @@
 #
 require(MatchIt)
 require(sva)
-require(reticulate)
-use_virtualenv("/opt/neuroharm/", required=TRUE)
-py_config()
-neuroharm <- import("neuroHarmonize")
+require(cdcsis)
 
-causal.ComBat <- function(X, batches, covariates, match.form, exact=NULL) {
+causal.ComBat <- function(X, batches, covariates, match.form, match.args=list(method="nearest", exact=NULL, replace=FALSE, caliper=.1)) {
   retain.ids <- unique(balance.batches(batches, covariates, match.form, exact=exact))
   X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
   
@@ -25,20 +22,22 @@ causal.ComBat <- function(X, batches, covariates, match.form, exact=NULL) {
               Retained.Ids=retain.ids))
 }
 
-causal.NeuroH <- function(X, batches, covariates, match.form, exact=NULL) {
-  retain.ids <- unique(balance.batches(batches, covariates, match.form, exact=exact))
+causal.cdcov <- function(X, batches, covariates, match.form, match.args=NULL, R=1000) {
+  retain.ids <- unique(balance.batches(batches, covariates, match.form, match.args=match.args))
   X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
   
-  covars <- data.frame(SITE=t.tilde, AGE=Y.tilde$Age, SEX_M=as.numeric(Y.tilde$Sex == 2))
-  dat.norm <- neuroharm$harmonizationLearn(X.tilde, covars)[[2]]
-  return(list(Data=dat.norm,
+  test.out <- cdcov.test(X.tilde, t.tilde, Y.tilde, num.bootstrap = R)
+  return(list(X=X.tilde,
               Batches=t.tilde,
               Covariates=Y.tilde,
+              Test=test.out,
               Retained.Ids=retain.ids))
 }
 
-balance.batches <- function(batches, covariates, match.form, exact=NULL) {
+balance.batches <- function(batches, covariates, match.form, match.args=NULL) {
   # obtain the smallest batch
+  batches <- as.character(batches)
+  covariates <- cbind(data.frame(Batch=batches), covariates)
   batch.sum <- batches %>% table()
   batch.names <- names(batch.sum)
   tx.batch <- batch.names[which.min(batch.sum)]
@@ -48,7 +47,7 @@ balance.batches <- function(batches, covariates, match.form, exact=NULL) {
   
   paired.matches <- lapply(batch.names[batch.names != tx.batch], function(batch) {
     covar.cont <- covariates[batches == batch,]
-    covariate.match(covar.tx, covar.cont, match.form=match.form, exact=exact)
+    covariate.match(covar.tx, covar.cont, match.form=match.form, match.args=match.args)
   })
   
   I.mat <- which(apply(sapply(paired.matches, function(x) x$I.mat.k), c(1), sum) > 0)
@@ -59,14 +58,13 @@ balance.batches <- function(batches, covariates, match.form, exact=NULL) {
   return(retain.ids)
 }
 
-covariate.match <- function(covar.tx, covar.cont, match.form, exact=NULL) {
+covariate.match <- function(covar.tx, covar.cont, match.form, match.args=NULL) {
   n.kprime <- dim(covar.tx)[1]; n.k <- dim(covar.cont)[1]
   n.matches <- floor(n.k/n.kprime)
-  match <- matchit(formula(sprintf("as.factor(Treatment) ~ %s", match.form)),
+  match <- do.call(matchit, c(list(formula(sprintf("as.factor(Treatment) ~ %s", match.form)),
                    data=rbind(covar.tx %>% mutate(Treatment = 1),
                               covar.cont %>% mutate(Treatment = 0)),
-                   method="nearest", exact=exact, ratio=n.matches, replace=FALSE,
-                   caliper=.1)
+                   ratio=n.matches), match.args))
   mat.mtx <- match$match.matrix
   I.mat.k <- as.numeric(apply(mat.mtx, c(1), function(x) {sum(!is.na(x))}) > 0)
   names(I.mat.k) <- names(match$weights[1:n.kprime])
@@ -80,4 +78,20 @@ covariate.match <- function(covar.tx, covar.cont, match.form, exact=NULL) {
   colnames(M.mat.k) <- as.numeric(ctrl.names)
   
   return(list(I.mat.k=I.mat.k, M.mat.k=M.mat.k))
+}
+
+require(reticulate)
+use_virtualenv("/opt/neuroharm/", required=TRUE)
+py_config()
+neuroharm <- import("neuroHarmonize")
+causal.NeuroH <- function(X, batches, covariates, match.form, match.args=list(method="nearest", exact=NULL, replace=FALSE, caliper=.1)) {
+  retain.ids <- unique(balance.batches(batches, covariates, match.form, exact=exact))
+  X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
+  
+  covars <- data.frame(SITE=t.tilde, AGE=Y.tilde$Age, SEX_M=as.numeric(Y.tilde$Sex == 2))
+  dat.norm <- neuroharm$harmonizationLearn(X.tilde, covars)[[2]]
+  return(list(Data=dat.norm,
+              Batches=t.tilde,
+              Covariates=Y.tilde,
+              Retained.Ids=retain.ids))
 }
