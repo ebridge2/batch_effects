@@ -9,6 +9,7 @@
 require(MatchIt)
 require(sva)
 require(cdcsis)
+require(tidyverse)
 
 causal.ComBat <- function(X, batches, covariates, match.form, match.args=list(method="nearest", exact=NULL, replace=FALSE, caliper=.1)) {
   retain.ids <- unique(balance.batches(batches, covariates, match.form, exact=exact))
@@ -42,7 +43,7 @@ balance.batches <- function(batches, covariates, match.form, match.args=NULL) {
   batch.names <- names(batch.sum)
   tx.batch <- batch.names[which.min(batch.sum)]
   rownames(covariates) <- 1:nrow(covariates)
-  covar.tx <- covariates[batches == tx.batch,]
+  covar.tx <- covariates[batches == tx.batch,,drop=FALSE]
   
   
   paired.matches <- lapply(batch.names[batch.names != tx.batch], function(batch) {
