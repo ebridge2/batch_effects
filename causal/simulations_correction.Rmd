@@ -1,0 +1,130 @@
+---
+title: "Batch Effect Correction Simulations"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(sva)
+require(ggplot2)
+```
+
+## Simulations
+
+```{r, fig.height=2.5, fig.width=6}
+sims = list("I. Assumption Correct, Overlap"=sim_line, "II. Assumption Correct, Limited Overlap"=sim_line, 
+            "III. Assumption Incorrect, Overlap" = sim_sigmoid,
+            "IV. Assumption Incorrect, Limited Overlap"=sim_sigmoid)
+
+sim.opts <- list("I. Assumption Correct, Overlap"=list(unbalancedness=1),
+                 "II. Assumption Correct, Limited Overlap"=list(), 
+                 "III. Assumption Incorrect, Overlap" = list(unbalancedness=1),
+                 "IV. Assumption Incorrect, Limited Overlap"=list())
+n = 100
+nbreak <- 200
+sim_examples <- lapply(names(sims), function(simn) {
+    sim <- do.call(sims[[simn]], c(list(n=n, null=FALSE), sim.opts[[simn]]))
+    true_x = seq(from=sim$x.bounds[1], to=sim$x.bounds[2], length.out=nbreak)
+    if (simn == "Quadratic") {
+      batch0 = true_x^2; batch1 = batch0 + 1
+      #cov.model <- model.matrix(~ poly(sim$X, degree=2))
+      cov.model <- model.matrix(~ 1 + sim$X)
+    } else if (grepl("Assumption Incorrect",simn)) {
+      batch0 = 4*sigmoid(6*true_x); batch1 = batch0 + 1
+      cov.model <- model.matrix(~1 + sim$X)
+      #cov.model <- model.matrix(~1 + sigmoid(-3*sim$X))
+    } else {
+      batch0 = -2*(true_x - .5); batch1 = batch0 + 1
+      cov.model <- model.matrix(~ 1 + sim$X)
+    }
+    true.sig.df <- data.frame(X=c(true_x, true_x), Y=c(batch0, batch1), Batch=c(rep(0, nbreak), rep(1, nbreak))) %>%
+      mutate(Batch=factor(Batch, levels=c(0, 1), ordered=TRUE))
+    
+    if (simn == "Quadratic") {
+      cov.model.true <- model.matrix(~poly(true.sig.df$X, 2))
+      #cov.model.true <- model.matrix(~1 + true.sig.df$X)
+    } else if (grepl("Assumption Incorrect",simn)) {
+      cov.model.true <- model.matrix(~1 + true.sig.df$X)
+      #cov.model.true <- model.matrix(~1 + sigmoid(-3*true.sig.df$X))
+    } else {
+      cov.model.true <- model.matrix(~1 + true.sig.df$X)
+    }
+    
+    testdat <- t(cbind(sim$Y, rnorm(100)))
+    
+    cor.sim <- ComBat_return_model(testdat, as.vector(sim$Batch), mod=cov.model)
+    
+    batches <- lapply(unique(true.sig.df$Batch), function(i) which(true.sig.df$Batch == i))
+    Design <- cbind(c(rep(1, nbreak), rep(0, nbreak)), c(rep(0, nbreak), rep(1, nbreak)))
+    
+    test2 = cbind(true.sig.df$Y, rep(0, 2*nbreak))
+    corrected_means <- apply_batch_adjustment(test2, batches, Design, cor.sim$Gamma,
+                                              cor.sim$Delta, sapply(batches, function(i) {length(i)}), cor.sim$Var,
+                                              cor.sim$Grand.mean, cor.sim$B.hat, cov.model.true)
+    
+    corrected_dat.means <- data.frame(X=true.sig.df$X, Y=corrected_means[,1], Batch=true.sig.df$Batch)
+    return(list(Data=rbind(data.frame(X=sim$X, Y=sim$Y, Batch=sim$Batch) %>% mutate(Simulation=simn, Status="(A) Raw"),
+                     data.frame(X=sim$X, Y=cor.sim$Corrected[1,], Batch=sim$Batch) %>% mutate(Simulation=simn, Status="(B) Adjusted")), 
+                Means=rbind(true.sig.df %>% mutate(Simulation=simn, Signal="True", Status="(A) Raw"),
+                            corrected_dat.means %>% mutate(Simulation=simn, Signal="True", Status="(B) Adjusted"),
+                            data.frame(X=c(true_x, true_x),
+                                       Y=c(cor.sim$B.hat["sim$X", 1]*true_x + cor.sim$B.hat["batch0",1],
+                                           cor.sim$B.hat["sim$X", 1]*true_x + cor.sim$B.hat["batch1",1]),
+                                       Batch=c(rep(0, nbreak), rep(1, nbreak))) %>% 
+                              mutate(Signal="Assumed", Simulation=simn, Status="(A) Raw"),
+                            data.frame(X=c(true_x, true_x),
+                                       Y=c(cor.sim$B.hat["sim$X",1]*true_x + cor.sim$Grand.mean[,1],
+                                           cor.sim$B.hat["sim$X",1]*true_x + cor.sim$Grand.mean[,1]),
+                                       Batch=c(rep(0, nbreak), rep(1, nbreak))) %>% 
+                              mutate(Signal="Assumed", Simulation=simn, Status="(B) Adjusted")),
+                Range=data.frame(min.X = sim$x.bounds[1], max.X = sim$x.bounds[2], Simulation=simn)))
+})
+
+Range = do.call(rbind, lapply(sim_examples, function(ex) ex$Range))
+Data = do.call(rbind, lapply(sim_examples, function(ex) ex$Data)) %>%
+  mutate(Batch=factor(Batch, levels=c(0, 1), ordered=TRUE)) %>%
+  left_join(Range, by=c("Simulation"="Simulation")) %>%
+  mutate(X = (X - min.X)/(max.X - min.X),
+         Status=factor(Status, levels=c("(A) Raw", "(B) Adjusted"), ordered=TRUE),
+         Simulation=factor(Simulation, levels=names(sims), ordered=TRUE))
+
+ynorm.dat <- Data %>% 
+  group_by(Status, Simulation) %>%
+  summarize(min.Y = min(Y), max.Y = max(Y))
+
+Data <- Data %>%
+  left_join(ynorm.dat, by=c("Simulation"="Simulation", "Status"="Status")) %>%
+  mutate(Y = (Y - min.Y)/(max.Y - min.Y))
+
+Means = do.call(rbind, lapply(sim_examples, function(ex) ex$Means)) %>%
+  mutate(Batch=factor(Batch, levels=c(0, 1), ordered=TRUE)) %>%
+  left_join(Range, by=c("Simulation"="Simulation")) %>%
+  mutate(X = (X - min.X)/(max.X - min.X),
+         Status=factor(Status, levels=c("(A) Raw", "(B) Adjusted"), ordered=TRUE),
+         Simulation=factor(Simulation, levels=names(sims), ordered=TRUE),
+         Signal=factor(Signal, levels=c("True", "Assumed"), ordered=TRUE))#,
+         #Assumption=factor(Assumption, levels=c("Truth", "Assumption", ordered=TRUE)))
+Means <- Means %>%
+  left_join(ynorm.dat, by=c("Simulation"="Simulation", "Status"="Status")) %>%
+  mutate(Y = (Y - min.Y)/(max.Y - min.Y))
+
+```
+
+```{r, fig.height=2.5, fig.width=6}
+
+Means <- Means %>%
+  mutate(Line=sprintf("Batch %s, %s Signal", Batch, Signal),
+         Line=factor(Line, levels=c("Batch 0, True Signal", "Batch 1, True Signal",
+                                    "Batch 0, Assumed Signal", "Batch 1, Assumed Signal"),
+                     ordered=TRUE))
+ggplot(Data, aes(x=X, y=Y, color=Batch)) +
+  geom_point(alpha = 0.5) +
+  geom_line(data=Means, size=1.2, aes(linetype=Line)) +
+  scale_linetype_manual(values=c("Batch 0, True Signal"=1, "Batch 1, True Signal"=1,
+                          "Batch 0, Assumed Signal"=2, "Batch 1, Assumed Signal"=3)) +
+  scale_color_manual(values=c("0"="#d95f02", "1"="#7570b3")) +
+  facet_grid(Status ~ Simulation, scales="free") +
+  scale_y_continuous(name="Measurement", breaks=NULL) +
+  scale_x_continuous(name="Covariate", breaks=NULL) +
+  ggtitle("Non-causal batch adjustment procedures fail with heterogeneous covariate distributions")
+```

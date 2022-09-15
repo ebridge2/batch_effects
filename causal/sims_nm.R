@@ -31,4 +31,4 @@ results <- do.call(rbind, lapply(names(sims), function(name) {
 
 results$p.adj[!is.nan(results$p.value)] <- p.adjust(results$p.value[!is.nan(results$p.value)], method="BH")
 
-saveRDS(results, '../data/dcorr/sim_results.rds')
+saveRDS(results, '../data/dcorr/sim_results_nm.rds')
