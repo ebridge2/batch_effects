@@ -1,0 +1,340 @@
+---
+title: "Multivariate Batch Effects"
+author: "j1c"
+date: "09/21/2022"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=60),tidy=TRUE)
+```
+
+```{r, message=FALSE}
+require(tidyverse)
+require(grid)
+require(dplyr)
+require(ggridges)
+require(multcomp)
+require(gridExtra)
+require(parallel)
+require(survey)
+require(latex2exp)
+require(energy)
+require(gtable)
+require(ggplotify)
+require(kableExtra)
+require(scales)
+require(ggh4x)
+require(cowplot)
+require(dad)
+#source('./causal_investigation_helpers.R')
+```
+
+# Figures
+
+
+```{r}
+select <- dplyr::select
+mutate <- dplyr::mutate
+arrange = dplyr::arrange
+
+get_scaled_densities <- function(x, bw = 1.58) {
+    res <- density(x, bw = bw)
+    return(
+        data.frame(
+            x = res$x, y = res$y/max(res$y) *
+                length(x)
+        )
+    )
+}
+
+plot_demographics <- function(in_df, nested=FALSE) {
+
+    plt <- (df <- in_df %>%
+        group_by(SITE_ID, SEX, Continent) %>%
+        do(get_scaled_densities(.$AGE_AT_SCAN)) %>%
+        ungroup() %>%
+        mutate(
+            y = y/max(y) +
+                as.numeric(SITE_ID)
+        )) %>%
+        ggplot(
+            aes(
+                ymin = as.numeric(SITE_ID),
+                group = paste0(SITE_ID, SEX),
+                color = SEX, fill = SEX, x = x, y = y, ymax = y
+            )
+        ) +
+        geom_ribbon(alpha = 0.2) +
+        geom_line(color = "black") +
+        geom_jitter(
+            data = in_df, aes(
+                x = AGE_AT_SCAN, y = as.numeric(SITE_ID),
+                color = factor(SEX)
+            ),
+            width = 0.25, height = 0.2, size = 0.1, inherit.aes = FALSE
+        ) +
+        scale_fill_manual(
+            values = c(`1` = "red", `2` = "blue"),
+            labels = c(`1` = "Female", `2` = "Male"),
+            name = "Sex"
+        ) +
+        scale_color_manual(
+            values = c(`1` = "red", `2` = "blue"),
+            labels = c(`1` = "Female", `2` = "Male"),
+            name = "Sex", aesthetics = "color"
+        ) +
+        scale_y_continuous(
+            breaks = 1:length(levels(df$SITE_ID)),
+            labels = levels(df$SITE_ID),
+            name = "Dataset", expand = c(0.02, 0.02),
+            position = "right"
+        ) +
+        xlab("Age") +
+        theme_bw(base_size = 20) +
+        theme(panel.grid.minor = element_blank())
+    
+    if (nested == FALSE) {
+      plt + facet_grid("Continent~.", scales = "free", space = "free_y", switch = "y")
+
+    }
+    else if (nested== TRUE){
+      plt + facet_grid("DATASET + Continent ~ .", scales = "free", space = "free_y", switch = "y")
+    }
+
+
+    plt = plt %>%
+        grid.arrange(left = ggpubr::text_grob("Continent", size = 25, rot = 90))
+
+    return(plt)
+}
+```
+
+```{r,tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+abide <- read.csv("../data/demographics/abide_participants.csv") %>% mutate(SITE_ID = gsub("_", "", SITE_ID))
+
+for (i in 1:nrow(abide)) {
+  s <- abide$SITE_ID[i]
+  if (!(nchar(s) <=3)) {
+    new.Site_ID <- paste0(substr(s, 1, 3), substr(s, nchar(s), nchar(s)))
+  }
+  else {
+    new.Site_ID <-s
+  }
+  abide$SITE_ID[i] <- new.Site_ID
+}
+
+abide.ord <- abide %>% select(c("Continent", "SITE_ID")) %>% arrange(Continent, SITE_ID) %>% distinct()
+
+columns <- c("SITE_ID", "DX_GROUP", "SEX", "AGE_AT_SCAN", "Continent")
+
+
+
+abide <- abide %>%
+    select(columns) %>%
+    mutate(SITE_ID = sub("_", "", SITE_ID)) %>%
+    mutate(SITE_ID = factor(SITE_ID, levels = abide.ord$SITE_ID, ordered = TRUE)) %>%
+    mutate(Continent = factor(Continent, levels = unique(abide.ord$Continent))) %>%
+    mutate(SEX=factor(SEX))
+
+filter.out <- c()
+for (u in unique(abide$SITE_ID)) {
+  if (nrow(abide %>% filter(SITE_ID== u) %>% distinct(SEX)) == 1){
+    filter.out <- c(filter.out, u)
+  }
+}
+abide <- abide %>% filter(!SITE_ID %in% filter.out) %>% mutate(SITE_ID = factor(SITE_ID))
+
+abide$DATASET <- rep("ABIDE", length(abide$SITE_ID))
+
+```
+
+```{r}
+abide_plot <- plot_demographics(abide)
+ggsave("../Figures/abide_demographics.pdf", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
+ggsave("../Figures/abide_demographics.png", device="png", height = 11, width=8.5, unit="in", limitsize = FALSE)
+```
+
+
+```{r}
+srpbs <- read_tsv("../data/demographics/srpbs_participants.tsv", show_col_types = FALSE) %>% select(c( "site", "diag", "age", "sex"))
+colnames(srpbs) <- c("SITE_ID", "DX_GROUP", "AGE_AT_SCAN", "SEX")
+srpbs$Continent <- rep("Asia", length(srpbs$SITE_ID))
+
+srpbs.ord <- srpbs %>% select(c("Continent", "SITE_ID")) %>% arrange(Continent, SITE_ID) %>% distinct()
+
+srpbs <- srpbs %>%
+    mutate(SITE_ID = factor(SITE_ID, levels = srpbs.ord$SITE_ID, ordered = TRUE)) %>%
+    mutate(Continent = factor(Continent, levels = unique(srpbs.ord$Continent))) %>%
+    mutate(SEX=factor(SEX))
+
+srpbs$DATASET <- rep("SRPBS", length(srpbs$SITE_ID))
+
+
+srpbs_plot <- plot_demographics(srpbs)
+
+ggsave("../Figures/srpbs_demographics.pdf", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
+ggsave("../Figures/srpbs_demographics.png", device="png", height = 11, width=8.5, unit="in", limitsize = FALSE)
+```
+
+```{r}
+combined_df <- rbind(abide, srpbs)
+```
+
+
+```{r}
+plt <- (df <- combined_df %>%
+        group_by(SITE_ID, SEX, Continent, DATASET) %>%
+        do(get_scaled_densities(.$AGE_AT_SCAN)) %>%
+        ungroup() %>%
+        mutate(Continent = as.character(Continent)) %>%
+        mutate(
+            y = y/max(y) +
+                as.numeric(SITE_ID)
+        )) %>%
+        ggplot(
+            aes(
+                ymin = as.numeric(SITE_ID),
+                group = paste0(SITE_ID, SEX),
+                color = SEX, fill = SEX, x = x, y = y, ymax = y
+            )
+        ) +
+        geom_ribbon(alpha = 0.2) +
+        geom_line(color = "black") +
+        geom_jitter(
+            data = combined_df, aes(
+                x = AGE_AT_SCAN, y = as.numeric(SITE_ID),
+                color = factor(SEX)
+            ),
+            width = 0.25, height = 0.2, size = 0.1, inherit.aes = FALSE
+        ) +
+        scale_fill_manual(
+            values = c(`1` = "red", `2` = "blue"),
+            labels = c(`1` = "Female", `2` = "Male"),
+            name = "Sex"
+        ) +
+        scale_color_manual(
+            values = c(`1` = "red", `2` = "blue"),
+            labels = c(`1` = "Female", `2` = "Male"),
+            name = "Sex", aesthetics = "color"
+        ) +
+        scale_y_continuous(
+            breaks = 1:length(levels(df$SITE_ID)),
+            labels = levels(df$SITE_ID),
+            name = "Dataset", expand = c(0.02, 0.02),
+            position = "right"
+        ) +
+        xlab("Age") +
+        theme_bw(base_size = 14) +
+        theme(panel.grid.minor = element_blank(), legend.position="bottom") + 
+      #facet_nested("DATASET + Continent ~ .", scales = "free", space = "free_y", switch = "y")
+      facet_nested(DATASET + Continent ~ ., scales = "free", space = "free_y", switch = "y")
+  
+
+
+    plt = plt %>%
+        grid.arrange(left = ggpubr::text_grob("Continent", size = 14, rot = 90))
+  
+ggsave("../Figures/abide_srpbs_demographics.pdf", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
+ggsave("../Figures/abide_srpbs_demographics.png", device="png", height = 11, width=8.5, unit="in", limitsize = FALSE)
+```
+
+
+```{r}
+combined_df <- rbind(abide, srpbs)
+
+write.csv(combined_df, "../data/demographics/abide_srpbs_demographics.csv", quote=FALSE, row.names=FALSE)
+
+```
+
+
+```{r}
+res <- data.frame(matrix(ncol = 4, nrow = 0))
+
+for (dset in unique(combined_df$DATASET)){
+  combined_df2<- combined_df %>% mutate(SEX=as.numeric(SEX)) %>% filter(DATASET == dset)
+  siteNames <- sort(unique(combined_df2$SITE_ID))
+
+  for (i in 1:length(siteNames)){
+    for (j in 1:length(siteNames)){
+      s1 <- toString(siteNames[i])
+      s2 <- toString(siteNames[j])
+      
+      t1 <- combined_df2 %>% filter(SITE_ID==s1) %>% select(c("SEX", "AGE_AT_SCAN"))
+      t2 <- combined_df2 %>% filter(SITE_ID==s2) %>% select(c("SEX", "AGE_AT_SCAN"))
+      
+      tryCatch({d <- dad::hellinger(as.matrix(t1), as.matrix(t2))}, error=function(e) {return(0)})
+      
+      res <- rbind(res, c(s1, s2, d, dset))
+    }
+  }
+}
+
+colnames(res) <- c("SITE1", "SITE2", "DISTANCE", "DATASET")
+res <- res %>% mutate(DISTANCE = as.numeric(DISTANCE)) %>% mutate(SITE1 = factor(SITE1,levels =  sort(levels(combined_df$SITE_ID)), ordered=TRUE)) %>% mutate(SITE2 = factor(SITE2,levels = sort(levels(combined_df$SITE_ID)), ordered=TRUE)) 
+
+res$DISTANCE[is.nan(res$DISTANCE)] <- 0
+res$DISTANCE <- 1 - (res$DISTANCE / sqrt(2))
+```
+
+```{r}
+abide_dists <- (tmp <- res %>%
+  filter(DATASET == "ABIDE") %>%
+  arrange(SITE1, SITE2)) %>%
+  ggplot(aes(SITE1, SITE2, fill = DISTANCE)) +
+  geom_tile() + theme(
+  axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+  legend.position = "bottom"
+) +
+  scale_fill_gradient(low = "white", high = "#33007b") +
+  coord_equal() + labs(fill = "Overlap")
+
+abide_dists
+```
+
+
+
+```{r}
+srpbs_dists <- (tmp <- res %>%
+  filter(DATASET == "SRPBS") %>%
+  arrange(SITE1, SITE2)) %>%
+  ggplot(aes(SITE1, SITE2, fill = DISTANCE)) +
+  geom_tile() + theme(
+  axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+  legend.position = "bottom"
+) +
+  scale_fill_gradient(low = "white", high = "#33007b") +
+  coord_equal() + labs(fill = "Overlap")
+
+
+srpbs_dists
+```
+
+
+```{r}
+right_col <- plot_grid(
+  abide_dists, srpbs_dists, labels = c("B", "C"),
+  nrow = 2, label_size = 12
+)
+plot_grid(
+  plt, right_col, labels = c("A", ""),
+  label_size = 12, ncol = 2, rel_widths = c(1.9, 1)
+)
+
+ggsave(
+  "../Figures/mega_overlap.pdf", device = "pdf", height = 11, width = 10,
+  unit = "in", limitsize = FALSE
+)
+ggsave(
+  "../Figures/mega_overlap.png", device = "png", height = 11, width = 10,
+  unit = "in", limitsize = FALSE
+)
+```
+
