@@ -243,7 +243,7 @@ plt <- (df <- combined_df %>%
         grid.arrange(left = ggpubr::text_grob("Continent", size = 14, rot = 90))
   
 ggsave("../Figures/abide_srpbs_demographics.pdf", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
-ggsave("../Figures/abide_srpbs_demographics.png", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
+ggsave("../Figures/abide_srpbs_demographics.png", device="png", height = 11, width=8.5, unit="in", limitsize = FALSE)
 ```
 
 
