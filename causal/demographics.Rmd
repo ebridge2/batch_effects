@@ -118,7 +118,7 @@ plot_demographics <- function(in_df, nested=FALSE) {
 ```
 
 ```{r,tidy=TRUE, tidy.opts=list(width.cutoff=60)}
-abide <- read.csv("./data/composite_phenotypic_data.csv") %>% mutate(SITE_ID = gsub("_", "", SITE_ID))
+abide <- read.csv("./data/abide_participants.csv") %>% mutate(SITE_ID = gsub("_", "", SITE_ID))
 
 for (i in 1:nrow(abide)) {
   s <- abide$SITE_ID[i]
