@@ -118,7 +118,7 @@ plot_demographics <- function(in_df, nested=FALSE) {
 ```
 
 ```{r,tidy=TRUE, tidy.opts=list(width.cutoff=60)}
-abide <- read.csv("./data/abide_participants.csv") %>% mutate(SITE_ID = gsub("_", "", SITE_ID))
+abide <- read.csv("../data/demographics/abide_participants.csv") %>% mutate(SITE_ID = gsub("_", "", SITE_ID))
 
 for (i in 1:nrow(abide)) {
   s <- abide$SITE_ID[i]
@@ -158,13 +158,13 @@ abide$DATASET <- rep("ABIDE", length(abide$SITE_ID))
 
 ```{r}
 abide_plot <- plot_demographics(abide)
-ggsave("./figures/abide_demographics.pdf", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
-ggsave("./figures/abide_demographics.png", device="png", height = 11, width=8.5, unit="in", limitsize = FALSE)
+ggsave("../Figures/abide_demographics.pdf", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
+ggsave("../Figures/abide_demographics.png", device="png", height = 11, width=8.5, unit="in", limitsize = FALSE)
 ```
 
 
 ```{r}
-srpbs <- read_tsv("./data/srpbs_participants.tsv", show_col_types = FALSE) %>% select(c( "site", "diag", "age", "sex"))
+srpbs <- read_tsv("../data/demographics/srpbs_participants.tsv", show_col_types = FALSE) %>% select(c( "site", "diag", "age", "sex"))
 colnames(srpbs) <- c("SITE_ID", "DX_GROUP", "AGE_AT_SCAN", "SEX")
 srpbs$Continent <- rep("Asia", length(srpbs$SITE_ID))
 
@@ -180,8 +180,8 @@ srpbs$DATASET <- rep("SRPBS", length(srpbs$SITE_ID))
 
 srpbs_plot <- plot_demographics(srpbs)
 
-ggsave("./figures/srpbs_demographics.pdf", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
-ggsave("./figures/srpbs_demographics.png", device="png", height = 11, width=8.5, unit="in", limitsize = FALSE)
+ggsave("../Figures/srpbs_demographics.pdf", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
+ggsave("../Figures/srpbs_demographics.png", device="png", height = 11, width=8.5, unit="in", limitsize = FALSE)
 ```
 
 ```{r}
@@ -242,15 +242,15 @@ plt <- (df <- combined_df %>%
     plt = plt %>%
         grid.arrange(left = ggpubr::text_grob("Continent", size = 14, rot = 90))
   
-ggsave("./figures/combined_demographics.pdf", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
-ggsave("./figures/combined_demographics.png", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
+ggsave("../Figures/abide_srpbs_demographics.pdf", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
+ggsave("../Figures/abide_srpbs_demographics.png", device="pdf", height = 11, width=8.5, unit="in", limitsize = FALSE)
 ```
 
 
 ```{r}
 combined_df <- rbind(abide, srpbs)
 
-write.csv(combined_df, "./data/abide_srpbs_demographics.csv", quote=FALSE, row.names=FALSE)
+write.csv(combined_df, "../data/demographics/abide_srpbs_demographics.csv", quote=FALSE, row.names=FALSE)
 
 ```
 
@@ -329,11 +329,11 @@ plot_grid(
 )
 
 ggsave(
-  "./figures/mega_overlap.pdf", device = "pdf", height = 11, width = 10,
+  "../Figures/mega_overlap.pdf", device = "pdf", height = 11, width = 10,
   unit = "in", limitsize = FALSE
 )
 ggsave(
-  "./figures/mega_overlap.png", device = "png", height = 11, width = 10,
+  "../Figures/mega_overlap.png", device = "png", height = 11, width = 10,
   unit = "in", limitsize = FALSE
 )
 ```
