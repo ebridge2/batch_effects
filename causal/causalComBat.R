@@ -1,18 +1,23 @@
 # Causal ComBat
 #
-# A function for performing ComBat across multiple datasets.
+# A function for performing ComBat across multiple datasets, achieved via
+# matching.
 # Inputs
 #    X: An n row matrix (observations) with d columns (features)
-#     
-
-#
+#    batches: A n vector (observations) of batch annotations
+#    covariates: A n row matrix (observations) with d columns (covariates)
+#    match.form: the matching formula to use for matching individuals across
+#       datasets by the covariates.
+#    match.args: hyper parameters for performing matching of individuals
+#       across batches (passed directly to matchit)
 require(MatchIt)
 require(sva)
 require(cdcsis)
 require(tidyverse)
+library(nnet)
 
 causal.ComBat <- function(X, batches, covariates, match.form, match.args=list(method="nearest", exact=NULL, replace=FALSE, caliper=.1)) {
-  retain.ids <- unique(balance.batches(batches, covariates, match.form, exact=exact))
+  retain.ids <- unique(do.call(match_batches, list(batches, covariates, match.form, match.args=match.args)))
   X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
   
   mod <- model.matrix(as.formula(sprintf("~%s", match.form)), data=Y.tilde)
@@ -23,19 +28,74 @@ causal.ComBat <- function(X, batches, covariates, match.form, match.args=list(me
               Retained.Ids=retain.ids))
 }
 
-causal.cdcov <- function(X, batches, covariates, match.form, match.args=NULL, R=1000) {
-  retain.ids <- unique(balance.batches(batches, covariates, match.form, match.args=match.args))
+# Propensity Trim across multiple exposures via vector matching
+# adapted from Lopez et al. 2017
+#
+# Ts denotes (1 of K) categorical treatments in an n (samples) vector
+# Xs is a n x d matrix of covariates (columns) for each sample (rows)
+#
+# returns a boolean array for whether to include/exclude samples from
+# subsequent analysis
+vm_trim <- function(Ts, covariates) {
+  covariates = as.data.frame(covariates)
+  
+  # Fitting the Multinomial Logistic Regression Model
+  Ts_unique <- unique(Ts)
+  K <- length(Ts_unique)
+  Ts <- factor(Ts, levels=Ts_unique)
+
+  m <- multinom(factor(Ts) ~ ., data = as.data.frame(covariates))
+  
+  # Making predictions using the fitted model
+  pred <- predict(m, newdata = as.data.frame(covariates), type = "probs")
+  
+  # if only binary treatment levels, add a column for the reference
+  if (K == 2) {
+    pred <- cbind(1 - pred, pred)
+    colnames(pred) <- Ts_unique
+  }
+  
+  # Function to calculate the range of predicted probabilities for each treatment
+  calculate_Rtable <- function(Tval) {
+    Rtab <- t(apply(pred[Ts == Tval, ], 2, function(x) c(min(x), max(x))))
+    c(max(Rtab[, 1]), min(Rtab[, 2]))
+  }
+  
+  # Creating the Rtable to store the range of predicted probabilities for each treatment
+  Rtable <- t(sapply(Ts_unique, calculate_Rtable))
+  rownames(Rtable) = Ts_unique
+  
+  # Function to check if each observation satisfies balance condition for each treatment
+  check_balance <- function(i) {
+    sapply(as.character(Ts_unique), function(Tval) pred[i, Tval] >= Rtable[Tval, 1] & pred[i, Tval] <= Rtable[Tval, 2])
+  }
+  
+  # Creating the balance_check matrix to check if each observation satisfies balance condition for each treatment
+  balance_check <- t(sapply(1:nrow(covariates), check_balance))
+  
+  # Finding observations that satisfy balance condition for all treatments
+  balanced_ids <- apply(balance_check, 1, all)
+}
+
+# python implementation of Bridgeford et al., 2023
+causal.cdcorr <- function(X, Ts, covariates, R=1000) {
+  covariates <- as.data.frame(covariates)
+  
+  # vector match for propensity trimming, and then reduce sub-sample to the
+  # propensity matched subset
+  retain.ids <- which(vm_trim(Ts, covariates))
   X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
   
+  # run statistical test
   test.out <- cdcov.test(X.tilde, t.tilde, Y.tilde, num.bootstrap = R)
   return(list(X=X.tilde,
               Batches=t.tilde,
               Covariates=Y.tilde,
               Test=test.out,
-              Retained.Ids=retain.ids))
+              Retained.Ids=retain.ids)) 
 }
 
-balance.batches <- function(batches, covariates, match.form, match.args=NULL) {
+match_batches <- function(batches, covariates, match.form, match.args=NULL) {
   # obtain the smallest batch
   batches <- as.character(batches)
   covariates <- cbind(data.frame(Batch=batches), covariates)
