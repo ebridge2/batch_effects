@@ -144,5 +144,5 @@ names(preproc.obj) <- norm.options
 
 saveRDS(list(Site=result.site %>% mutate(Cohort=cohort), Covariate=result.cov %>% mutate(Cohort=cohort), #Covariate.Cont=result.cov.cont,
              Signal=result.signal %>% mutate(Cohort=cohort), Stats=gr.stats, Covar.Tbl=cov.dat %>% mutate(Cohort=cohort), Cohort=cohort),
-        file=sprintf('/base/data/dcorr/pdcorr_outputs_%s_%s_%s.rds', modality, parcellation, cohort))
+        file=sprintf('/base/data/dcorr/cdcorr_outputs_%s_%s_%s.rds', modality, parcellation, cohort))
 saveRDS(preproc.obj, file=sprintf('/base/data/dcorr/inputs_%s_%s_%s.rds', modality, parcellation, cohort))
