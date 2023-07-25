@@ -11,6 +11,7 @@ require(parallelDist)
 require(sva)
 require(mgcv)
 require(entropy)
+require(cdcsis)
 source('./causalComBat.R')
 
 use_virtualenv("/opt/neuroharm/", required=TRUE)
@@ -87,11 +88,11 @@ pairwise.driver <- function(graphs, cov.dat, parcellation="AAL", retain.dims=(as
       Dmtx.norm <- as.matrix(dist(graphs.combt))
       
       result.site <- site_pair(Dmtx.norm, cov.ij, dset.i=dset.i, dset.j=dset.j, R=R)
-      pdcorr.cov.sex <- pdcor.test(Dmtx.norm, y=cov.ij$Sex, z=cov.ij$Age, R=R)
-      pdcorr.cov.age <- pdcor.test(Dmtx.norm, y=cov.ij$Age, z=cov.ij$Sex, R=R)
+      cdcorr.cov.sex <- cdcov.test(Dmtx.norm, y=cov.ij$Sex, z=cov.ij$Age, R=R)
+      cdcorr.cov.age <- cdcov.test(Dmtx.norm, y=cov.ij$Age, z=cov.ij$Sex, R=R)
       result.cov <- data.frame(Dataset.Trt=dset.i, Dataset.Ctrl=dset.j, Effect.Name=c("Sex", "Age"),
-                               Effect=c(pdcorr.cov.sex$estimate, pdcorr.cov.age$estimate),
-                               p.value=c(pdcorr.cov.sex$p.value, pdcorr.cov.age$p.value))
+                               Effect=c(cdcorr.cov.sex$statistic, cdcorr.cov.age$statistic),
+                               p.value=c(cdcorr.cov.sex$p.value, cdcorr.cov.age$p.value))
       
       result.signal <- signal_ana(graphs.combt, cov.ij, parcellation=parcellation,
                                   mc.cores=1, retain.dims=retain.dims) %>%
@@ -190,34 +191,23 @@ compute_propensities <- function(df, form="Treatment ~ Sex + Age + Continent", t
 
 adjusted.site_effect <- function(Dmtx.ij, cov.ij, form="as.factor(Treatment) ~ Age + as.factor(Sex)", dset.i="", dset.j="", ov.ij=0, R=1000) {
   tryCatch({
-    cov.dat.ij.prop <- compute_propensities(cov.ij, form=form, trim=.01)
-    # subset dmatrix by untrimmed data
-    Dmtx.ij.trim <- Dmtx.ij[cov.dat.ij.prop$Stay, cov.dat.ij.prop$Stay]
-    cov.dat.ij.trim <- cov.dat.ij.prop %>%
-      filter(Stay == TRUE) %>%
-      dplyr::select(Age, Sex, Continent, Treatment) %>%
-      mutate(Age=as.numeric(Age), Sex=as.factor(Sex), Continent=as.factor(Continent))
+    covariates <- as.data.frame(covariates)
     
-    if (length(unique(cov.dat.ij.trim$Sex)) == 1) {
-      form <- "as.factor(Treatment) ~ Age"
-    }
-    if ("Sex" %in% form) {
-      exact="Sex"
+    # vector match for propensity trimming, and then reduce sub-sample to the
+    # propensity matched subset
+    retain.ids <- which(vm_trim(cov.ij$Treatment, cov.ij %>% select(Age, Sex, Continent)))
+    X.tilde <- X[retain.ids, retain.ids]; Y.tilde <- (cov.ij %>% select(Age, Sex, Continent))[retain.ids,,drop=FALSE]; t.tilde <- cov.ij$Treatment[retain.ids]
+    if (length(retain.ids) == 0) {
+      test.adj <- list(Data="Adjusted", Method="CDCor", Dataset.Trt=dset.i,
+                       Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=NULL,
+                       p.value=NULL, Overlap=ov.ij)
     } else {
-      exact=NULL
+      # run statistical test
+      test.out <- cdcov.test(X.tilde, t.tilde, Y.tilde, num.bootstrap = R)
+      return(data.frame(Data="Adjusted", Method="CDCor", Dataset.Trt=dset.i,
+                        Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.adj$statistic,
+                        p.value=test.adj$p.value, Overlap=ov.ij)) 
     }
-    n.k <- max(floor(sum(cov.dat.ij.trim$Treatment == 0)/sum(cov.dat.ij.trim$Treatment == 1)), 1)
-    match <- matchit(formula(form), data=cov.dat.ij.trim, method="nearest", exact=exact, ratio=n.k, caliper=.1)
-    retain.ids <- as.numeric(names(match.data(match)$weights))
-    Dmtx.cmp <- Dmtx.ij.trim[retain.ids, retain.ids]
-    cov.dat.cmp <- cov.dat.ij.trim[retain.ids,]
-    ov.ij=compute_overlap(cov.dat.cmp %>% filter(Treatment  == 1), cov.dat.cmp %>% filter(Treatment == 0))
-    
-    test.adj <- pdcor.test(as.dist(Dmtx.cmp), cov.dat.cmp$Treatment,
-                           cov.dat.cmp %>% select(Sex, Age) %>% mutate(Sex=as.numeric(Sex), Age=as.numeric(Age)), R=R)
-    return(data.frame(Data="Adjusted", Method="PDcor", Dataset.Trt=dset.i,
-                      Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.adj$estimate,
-                      p.value=test.adj$p.value, Overlap=ov.ij))
   }, error=function(e) {
     return(NULL)
   })
@@ -240,12 +230,12 @@ site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
     }
     
     ## Conditional
-    test.cond <- pdcor.test(as.dist(Dmtx.dat.ij), cov.dat.ij$Treatment,
+    test.cond <- cdcov.test(as.dist(Dmtx.dat.ij), cov.dat.ij$Treatment,
                              cov.dat.ij %>% dplyr::select(Continent, Sex, Age) %>%
                                mutate(Continent=as.numeric(Continent), Sex=as.numeric(Sex),
                                       Age=as.numeric(Age)), R=R)
-    result$cond <- data.frame(Data="Conditional", Method="PDcor", Dataset.Trt=dset.i,
-                               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.cond$estimate,
+    result$cond <- data.frame(Data="Conditional", Method="CDCorr", Dataset.Trt=dset.i,
+                               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.cond$statistic,
                                p.value=test.cond$p.value, Overlap=ov.ij)
     
     # Adjusted Approach. If there is only 1 sex amongst both datasets, omit
@@ -260,7 +250,7 @@ site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
     return(do.call(rbind, result) %>%
              mutate(Effect.Name="Site"))
   }, error=function(e) {
-    return(data.frame(Data=c("Associational", "Causal Obs."), Method="PDcor", Dataset.Trt=dset.i,
+    return(data.frame(Data=c("Associational", "Causal Obs."), Method="CDCorr", Dataset.Trt=dset.i,
               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=NA, p.value=NA,
               Overlap=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i),
                                       cov.dat.ij %>% filter(Dataset == dset.j))))
@@ -308,23 +298,23 @@ compute_effect <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=100,
   normal.fn <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=1000, mc.cores=1) {
     n.i <- length(cov.dat.i$id)
 
-    test.uncor <- pdcor.test(D.i, as.numeric(cov.dat.i[[E1.name]]),
+    test.uncor <- cdcor.test(D.i, as.numeric(cov.dat.i[[E1.name]]),
                              as.numeric(cov.dat.i[[E2.name]]), R=R)
 
     jk.stat <- simplify2array(mclapply(1:n.i, function(i) {
       ids <- (1:n.i)[-i]
       cov.dat.boot <- cov.dat.i[ids,]
       Dmtx.dat.boot <- as.dist(as.matrix(D.i)[ids, ids])
-      test.boot <- pdcor(Dmtx.dat.boot, as.numeric(cov.dat.boot[[E1.name]]),
+      test.boot <- cdcov(Dmtx.dat.boot, as.numeric(cov.dat.boot[[E1.name]]),
                          as.numeric(cov.dat.boot[[E2.name]]))
       return(test.boot)
     }))
-    psi <- test.uncor$estimate*n.i - (n.i - 1)*jk.stat
+    psi <- test.uncor$statistic*n.i - (n.i - 1)*jk.stat
     ps.mean <- mean(psi); ps.var <- var(psi)
     ci.jk <- c(ps.mean + qnorm(.025)*sqrt(1/n.i*ps.var),
                ps.mean + qnorm(.975)*sqrt(1/n.i*ps.var))
 
-    result <- data.frame(Method="PDcor", Effect.Name=E1.name, Effect=test.uncor$estimate, Effect.lwr.jk=ci.jk[1], Effect.upr.jk=ci.jk[2],
+    result <- data.frame(Method="CDCorr", Effect.Name=E1.name, Effect=test.uncor$statistic, Effect.lwr.jk=ci.jk[1], Effect.upr.jk=ci.jk[2],
                          # Effect.lwr.npboot=ci.npboot[1], Effect.upr.npboot=ci.npboot[2],
                          p.value=test.uncor$p.value, Entropy=entropy(as.numeric(cov.dat.i[[E1.name]]), method="MM"),
                          Variance=var(as.numeric(cov.dat.i[[E1.name]])),
@@ -332,7 +322,7 @@ compute_effect <- function(D.i, cov.dat.i, E1.name, E2.name, R=1000, nboots=100,
     return(result)
   }
   result <- tryCatch(normal.fn(D.i, cov.dat.i, E1.name, E2.name, R=R, nboots=nboots, mc.cores=mc.cores), error=function(e) {
-    result <- data.frame(Method="PDcor", Effect.Name=E1.name, Effect=NA, Effect.lwr.jk=NA, Effect.upr.jk=NA,
+    result <- data.frame(Method="CDCorr", Effect.Name=E1.name, Effect=NA, Effect.lwr.jk=NA, Effect.upr.jk=NA,
                       Effect.lwr.npboot=NA, Effect.upr.npboot=NA, Effect.lwr.adjboot=NA, Effect.upr.adjboot=NA,
                       p.value=NA, Entropy=NA, Variance=NA,
                       n=n.i, N=length(unique(cov.dat.i$Subid)))
