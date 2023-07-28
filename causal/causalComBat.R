@@ -88,6 +88,9 @@ causal.cdcorr <- function(X, Ts, covariates, R=1000) {
   # vector match for propensity trimming, and then reduce sub-sample to the
   # propensity matched subset
   retain.ids <- which(vm_trim(Ts, covariates))
+  if (length(retain.ids) == 0) {
+    stop("No samples remain after balancing.")
+  }
   X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- Ts[retain.ids]
   
   # run statistical test
