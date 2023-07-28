@@ -81,8 +81,20 @@ vm_trim <- function(Ts, covariates) {
   return(balanced_ids)
 }
 
+zero_one_dist <- function(Ts) {
+  # Convert input vector to a factor
+  Ts_fact <- factor(Ts)
+  
+  # Perform one-hot encoding using model.matrix
+  encoded_matrix <- model.matrix(~Ts_fact - 1)
+  
+  # Convert the matrix to a data frame (optional)
+  Ts_ohe <- as.data.frame(encoded_matrix)
+  
+   return(dist(Ts_ohe))
+}
 # R implementation of Bridgeford et al., 2023
-causal.cdcorr <- function(X, Ts, covariates, R=1000, index = 2, seed=1, num.threads=1, width = stats::bw.nrd) {
+causal.cdcorr <- function(X, Ts, covariates, R=1000, dist.method="euclidean", distance = FALSE, seed=1, num.threads=1) {
   covariates <- as.data.frame(covariates)
   
   # vector match for propensity trimming, and then reduce sub-sample to the
@@ -91,18 +103,19 @@ causal.cdcorr <- function(X, Ts, covariates, R=1000, index = 2, seed=1, num.thre
   if (length(retain.ids) == 0) {
     stop("No samples remain after balancing.")
   }
-  if (distance = "dist") {
+  if (distance == "dist") {
     X.tilde <- as.dist(X[retain.ids, retain.ids])
   } else {
     X.tilde <- X[retain.ids,]
+    DX.tilde = dist(X.tilde, method=dist.method)
   }
   Y.tilde <- covariates[retain.ids,]
   
-  t.tilde <- Ts[retain.ids]
+  DT.tilde = zero_one_dist(Ts[retain.ids])
   
   # run statistical test
-  test.out <- cdcov.test(X.tilde, t.tilde, Y.tilde, num.bootstrap = R, width=width,
-                         index=index, seed=seed, num.threads=num.threads, distance=distance)
+  test.out <- cdcov.test(DX.tilde, DT.tilde, Y.tilde, num.bootstrap = R,
+                        seed=seed, num.threads=num.threads, distance=TRUE)
   return(list(X=X.tilde,
               Exposures=t.tilde,
               Covariates=Y.tilde,
