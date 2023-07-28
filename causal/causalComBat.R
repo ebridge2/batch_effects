@@ -98,11 +98,6 @@ zero_one_dist <- function(Ts) {
 cond.dcorr <- function(X, Ts, covariates, R=1000, dist.method="euclidean", distance = FALSE, seed=1, num.threads=1) {
   covariates <- as.data.frame(covariates)
   
-  # vector match for propensity trimming, and then reduce sub-sample to the
-  # propensity matched subset
-  if (length(retain.ids) == 0) {
-    stop("No samples remain after balancing.")
-  }
   if (isTRUE(distance)) {
     DX <- as.dist(X)
   } else {
@@ -200,6 +195,19 @@ causal.NeuroH <- function(X, batches, covariates, match.form, match.args=list(me
   
   covars <- data.frame(SITE=t.tilde, AGE=Y.tilde$Age, SEX_M=as.numeric(Y.tilde$Sex == 2))
   dat.norm <- neuroharm$harmonizationLearn(X.tilde, covars)[[2]]
+  return(list(Data=dat.norm,
+              Batches=t.tilde,
+              Covariates=Y.tilde,
+              Retained.Ids=retain.ids))
+}
+
+
+causal.ComBat.GAM <- function(X, batches, covariates, match.form, match.args=list(method="nearest", exact=NULL, replace=FALSE, caliper=.1)) {
+  retain.ids <- unique(balance.batches(batches, covariates, match.form, exact=exact))
+  X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
+  
+  covars <- data.frame(SITE=t.tilde, AGE=Y.tilde$Age, SEX_M=as.numeric(Y.tilde$Sex == 2))
+  dat.norm <- neuroharm$harmonizationLearn(X.tilde, covars, smooth=c("AGE"))[[2]]
   return(list(Data=dat.norm,
               Batches=t.tilde,
               Covariates=Y.tilde,

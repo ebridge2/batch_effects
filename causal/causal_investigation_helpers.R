@@ -279,6 +279,7 @@ causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
     # get first and second dset
     dset.1 <- dset.pairs[1,x]
     dset.2 <- dset.pairs[2,x]
+    print(sprintf("%d: %s, %s", x, dset.1, dset.2))
     n.1 <- sum(cov.dat$Dataset == dset.1)
     n.2 <- sum(cov.dat$Dataset == dset.2)
     # Control is always larger of the two for all combn
@@ -550,4 +551,73 @@ sum.stats <- function(graphs, cov.dat, n.vertices) {
   dset.stats <- summarize_over(graphs, cov.dat, "Dataset", n.vertices)
   cont.stats <- summarize_over(graphs, cov.dat, "Continent", n.vertices)
   return(list(All=all.stats, Dataset=dset.stats, Continent=cont.stats))
+}
+
+
+singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
+                              norm.options = c("Raw", "Ranked", "Z-Score", "ComBat", "causal ComBat"),
+                              parcellation="AAL", retain.dims=(as.vector(diag(116)) != 1),
+                              mc.cores=1, R=1000, clique=NULL) {
+  lapply(norm.options, function(norm) {
+    print(norm)
+    cov.post <- cov.dat
+    if (norm == "ComBat") {
+      dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset))
+    } else if (norm == "Z-Score") {
+      dat.norm <- apply.along.dataset(gr.dat, cov.dat$Dataset, zsc.batch)
+    } else if (norm == "Ranked") {
+      dat.norm <- apply.along.dataset(gr.dat, cov.dat$Dataset, ptr.batch)
+    } else if (norm == "Raw") {
+      dat.norm <- gr.dat
+    } else if (norm == "conditional ComBat") {
+      mod <- model.matrix(as.formula("~as.factor(Sex) + Age"), data=cov.dat)
+      dat.norm <- t(ComBat(t(gr.dat), cov.dat$Dataset, mod=mod))
+    } else if (norm == "conditional NeuroH") {
+      cov.nh <- data.frame(SITE=cov.dat$Dataset, AGE=cov.dat$Age, SEX_M=as.numeric(cov.dat$Sex == 2))
+      dat.norm <- neuroharm$harmonizationLearn(gr.dat, cov.nh)[[2]]
+    } else if (norm == "causal ComBat") {
+      # asia.clique <- which(cov.dat$Dataset %in% c("SWU4", "HNU1", "BNU3", "SWU1", "BNU2", "IPCAS1",
+      #                                              "BNU1", "IPCAS6", "IPCAS3", "SWU2", "SWU3", "IPCAS4"))
+      # am.clique <- which(cov.dat$Dataset %in% c("NKI24tr645", "NKI24tr1400", "NKI24tr2500", "NYU1", "UWM",
+      #                                           "Utah1", "MRN1", "IBATRT", "NYU2"))
+      # norm.asia <- t(ComBat(t(gr.dat[asia.clique,]), cov.dat$Dataset[asia.clique]))
+      # norm.am <- t(ComBat(t(gr.dat[am.clique,]), cov.dat$Dataset[am.clique]))
+      # dat.norm <- rbind(norm.asia, norm.am)
+      # cov.dat <- rbind(cov.dat[asia.clique,], cov.dat[am.clique,])
+      
+      idx.clique <- which(cov.dat$Dataset %in% clique)
+      
+      caus.cb <- causal.ComBat(gr.dat[idx.clique,], cov.dat$Dataset[idx.clique], cov.dat[idx.clique,],
+                               'as.factor(Sex) + Age', exact="Sex")
+      dat.norm <- caus.cb$Data
+      cov.post <- caus.cb$Covariates
+      gr.dat.full <- gr.dat.full[idx.clique[caus.cb$Retained.Ids],]
+    } else if (norm == "causal NeuroH") {
+      idx.clique <- which(cov.dat$Dataset %in% clique)
+      
+      caus.nh <- causal.NeuroH(gr.dat[idx.clique,], cov.dat$Dataset[idx.clique], cov.dat[idx.clique,],
+                               'as.factor(Sex) + Age', exact="Sex")
+      dat.norm <- caus.nh$Data
+      cov.post <- caus.nh$Covariates
+      gr.dat.full <- gr.dat.full[idx.clique[caus.nh$Retained.Ids],]
+    }
+    cov.post <- cov.post %>% ungroup() %>% mutate(id=row_number())
+    # exhaustively compute full distance matrix once since $$$
+    #Dmtx.norm <- as.matrix(parDist(dat.norm, threads=ncores))
+    #result.site <- causal_ana_site(Dmtx.norm, cov.post, mc.cores=ncores, R=R)
+    #result.cov <- causal_ana_cov(Dmtx.norm, cov.post, mc.cores=ncores, R=R)
+    #result.cov.cont <- causal_ana_cov_cont(Dmtx.norm, cov.dat, mc.cores=ncores)
+    result.signal <- signal_ana(dat.norm, cov.post, parcellation=parcellation, mc.cores=ncores,
+                                retain.dims=retain.dims)
+    gr.dat.norm <- gr.dat.full
+    gr.dat.norm[,retain.dims] <- dat.norm
+    gr.stats <- sum.stats(gr.dat.norm, cov.post, n.vertices=n.vertices)
+    
+    return(list(Site=result.site %>% mutate(Method=norm),
+                Covariate=result.cov %>% mutate(Method=norm),
+                #Covariate.Cont=result.cov.cont %>% mutate(Method=norm),
+                Signal=result.signal %>% mutate(Method=norm),
+                Stats=gr.stats, D=Dmtx.norm, graphs.full=gr.dat.norm,
+                Covariates=cov.post %>% mutate(Method=norm), dat.norm=dat.norm))
+  })
 }
