@@ -116,7 +116,7 @@ cond.dcorr <- function(X, Ts, covariates, R=1000, dist.method="euclidean", dista
   test.out <- cdcov.test(DX, DT, covariates, num.bootstrap = R,
                          seed=seed, num.threads=num.threads, distance=TRUE)
   return(list(Test=test.out,
-              Retained.Ids=retain.ids)) 
+              Retained.Ids=retain.ids))
 }
 
 # R implementation of Bridgeford et al., 2023
