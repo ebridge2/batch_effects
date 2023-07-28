@@ -93,6 +93,32 @@ zero_one_dist <- function(Ts) {
   
    return(dist(Ts_ohe))
 }
+
+# Conditional distance correlation from Wang et al., 2015
+cond.dcorr <- function(X, Ts, covariates, R=1000, dist.method="euclidean", distance = FALSE, seed=1, num.threads=1) {
+  covariates <- as.data.frame(covariates)
+  
+  # vector match for propensity trimming, and then reduce sub-sample to the
+  # propensity matched subset
+  retain.ids <- which(vm_trim(Ts, covariates))
+  if (length(retain.ids) == 0) {
+    stop("No samples remain after balancing.")
+  }
+  if (isTRUE(distance)) {
+    DX <- as.dist(X)
+  } else {
+    DX = dist(X, method=dist.method)
+  }
+  
+  DT = zero_one_dist(Ts)
+  
+  # run statistical test
+  test.out <- cdcov.test(DX, DT, covariates, num.bootstrap = R,
+                         seed=seed, num.threads=num.threads, distance=TRUE)
+  return(list(Test=test.out,
+              Retained.Ids=retain.ids)) 
+}
+
 # R implementation of Bridgeford et al., 2023
 causal.cdcorr <- function(X, Ts, covariates, R=1000, dist.method="euclidean", distance = FALSE, seed=1, num.threads=1) {
   covariates <- as.data.frame(covariates)
@@ -103,8 +129,8 @@ causal.cdcorr <- function(X, Ts, covariates, R=1000, dist.method="euclidean", di
   if (length(retain.ids) == 0) {
     stop("No samples remain after balancing.")
   }
-  if (distance == "dist") {
-    X.tilde <- as.dist(X[retain.ids, retain.ids])
+  if (isTRUE(distance)) {
+    DX.tilde <- as.dist(X[retain.ids, retain.ids])
   } else {
     X.tilde <- X[retain.ids,]
     DX.tilde = dist(X.tilde, method=dist.method)
@@ -116,10 +142,7 @@ causal.cdcorr <- function(X, Ts, covariates, R=1000, dist.method="euclidean", di
   # run statistical test
   test.out <- cdcov.test(DX.tilde, DT.tilde, Y.tilde, num.bootstrap = R,
                         seed=seed, num.threads=num.threads, distance=TRUE)
-  return(list(X=X.tilde,
-              Exposures=t.tilde,
-              Covariates=Y.tilde,
-              Test=test.out,
+  return(list(Test=test.out,
               Retained.Ids=retain.ids)) 
 }
 
