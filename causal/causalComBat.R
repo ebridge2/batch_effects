@@ -40,9 +40,9 @@ vm_trim <- function(Ts, covariates) {
   covariates = as.data.frame(covariates)
   
   # Fitting the Multinomial Logistic Regression Model
-  Ts_unique <- unique(Ts)
-  K <- length(Ts_unique)
-  Ts <- factor(Ts, levels=Ts_unique)
+  K <- length(unique(Ts))
+  Ts <- as.numeric(factor(Ts, levels=unique(Ts)))
+  Ts_unique = unique(Ts)
 
   m <- multinom(factor(Ts) ~ ., data = as.data.frame(covariates))
   
@@ -57,8 +57,11 @@ vm_trim <- function(Ts, covariates) {
   
   # Function to calculate the range of predicted probabilities for each treatment
   calculate_Rtable <- function(Tval) {
-    Rtab <- t(apply(pred[Ts == Tval, ], 2, function(x) c(min(x), max(x))))
-    c(max(Rtab[, 1]), min(Rtab[, 2]))
+    Rtab = matrix(0, nrow=2, ncol=length(Ts_unique))
+    for (Tp in Ts_unique) {
+      Rtab[, Tp] = c(min(pred[Ts == Tp, Tval]), max(pred[Ts == Tp, Tval]))
+    }
+    c(max(Rtab[1,]), min(Rtab[2,]))
   }
   
   # Creating the Rtable to store the range of predicted probabilities for each treatment
@@ -75,21 +78,22 @@ vm_trim <- function(Ts, covariates) {
   
   # Finding observations that satisfy balance condition for all treatments
   balanced_ids <- apply(balance_check, 1, all)
+  return(balanced_ids)
 }
 
-# python implementation of Bridgeford et al., 2023
+# R implementation of Bridgeford et al., 2023
 causal.cdcorr <- function(X, Ts, covariates, R=1000) {
   covariates <- as.data.frame(covariates)
   
   # vector match for propensity trimming, and then reduce sub-sample to the
   # propensity matched subset
   retain.ids <- which(vm_trim(Ts, covariates))
-  X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- batches[retain.ids]
+  X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- Ts[retain.ids]
   
   # run statistical test
   test.out <- cdcov.test(X.tilde, t.tilde, Y.tilde, num.bootstrap = R)
   return(list(X=X.tilde,
-              Batches=t.tilde,
+              Exposures=t.tilde,
               Covariates=Y.tilde,
               Test=test.out,
               Retained.Ids=retain.ids)) 
