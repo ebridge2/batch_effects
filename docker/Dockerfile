@@ -8,6 +8,12 @@ RUN Rscript -e "install.packages('mgcv')"
 RUN Rscript -e "install.packages('entropy')"
 RUN Rscript -e "install.packages(c('mltools'))"
 RUN Rscript -e "install.packages(c('cdcsis'))"
-RUN python3 -m venv /opt/venv
+RUN python3 -m venv /opt/neuroharm
 RUN git clone https://github.com/rpomponio/neuroHarmonize.git /neuroharm
-RUN . /opt/venv/bin/activate && pip install neuroHarmonize
+
+RUN . /opt/neuroharm/bin/activate && pip install neuroHarmonize numpy
+RUN Rscript -e "install.packages('reticulate')"
+
+RUN . /opt/neuroharm/bin/activate && pip install pandas
+RUN . /opt/neuroharm/bin/activate && pip install statsmodels nibabel
+RUN Rscript -e "install.packages(c('GeneralisedCovarianceMeasure', 'weightedGCM'))"
