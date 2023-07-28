@@ -82,7 +82,7 @@ vm_trim <- function(Ts, covariates) {
 }
 
 # R implementation of Bridgeford et al., 2023
-causal.cdcorr <- function(X, Ts, covariates, R=1000) {
+causal.cdcorr <- function(X, Ts, covariates, R=1000, index = 2, seed=1, num.threads=1, width = stats::bw.nrd) {
   covariates <- as.data.frame(covariates)
   
   # vector match for propensity trimming, and then reduce sub-sample to the
@@ -91,10 +91,18 @@ causal.cdcorr <- function(X, Ts, covariates, R=1000) {
   if (length(retain.ids) == 0) {
     stop("No samples remain after balancing.")
   }
-  X.tilde <- X[retain.ids,]; Y.tilde <- covariates[retain.ids,]; t.tilde <- Ts[retain.ids]
+  if (distance = "dist") {
+    X.tilde <- as.dist(X[retain.ids, retain.ids])
+  } else {
+    X.tilde <- X[retain.ids,]
+  }
+  Y.tilde <- covariates[retain.ids,]
+  
+  t.tilde <- Ts[retain.ids]
   
   # run statistical test
-  test.out <- cdcov.test(X.tilde, t.tilde, Y.tilde, num.bootstrap = R)
+  test.out <- cdcov.test(X.tilde, t.tilde, Y.tilde, num.bootstrap = R, width=width,
+                         index=index, seed=seed, num.threads=num.threads, distance=distance)
   return(list(X=X.tilde,
               Exposures=t.tilde,
               Covariates=Y.tilde,
