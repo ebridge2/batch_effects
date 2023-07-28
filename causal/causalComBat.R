@@ -14,7 +14,7 @@ require(MatchIt)
 require(sva)
 require(cdcsis)
 require(tidyverse)
-library(nnet)
+require(nnet)
 
 causal.ComBat <- function(X, batches, covariates, match.form, match.args=list(method="nearest", exact=NULL, replace=FALSE, caliper=.1)) {
   retain.ids <- unique(do.call(match_batches, list(batches, covariates, match.form, match.args=match.args)))
@@ -44,7 +44,7 @@ vm_trim <- function(Ts, covariates) {
   Ts <- as.numeric(factor(Ts, levels=unique(Ts)))
   Ts_unique = unique(Ts)
 
-  m <- multinom(factor(Ts) ~ ., data = as.data.frame(covariates))
+  m <- nnet::multinom(factor(Ts) ~ ., data = as.data.frame(covariates))
   
   # Making predictions using the fitted model
   pred <- predict(m, newdata = as.data.frame(covariates), type = "probs")
@@ -100,7 +100,6 @@ cond.dcorr <- function(X, Ts, covariates, R=1000, dist.method="euclidean", dista
   
   # vector match for propensity trimming, and then reduce sub-sample to the
   # propensity matched subset
-  retain.ids <- which(vm_trim(Ts, covariates))
   if (length(retain.ids) == 0) {
     stop("No samples remain after balancing.")
   }
@@ -115,8 +114,7 @@ cond.dcorr <- function(X, Ts, covariates, R=1000, dist.method="euclidean", dista
   # run statistical test
   test.out <- cdcov.test(DX, DT, covariates, num.bootstrap = R,
                          seed=seed, num.threads=num.threads, distance=TRUE)
-  return(list(Test=test.out,
-              Retained.Ids=retain.ids))
+  return(list(Test=test.out))
 }
 
 # R implementation of Bridgeford et al., 2023
@@ -130,7 +128,7 @@ causal.cdcorr <- function(X, Ts, covariates, R=1000, dist.method="euclidean", di
     stop("No samples remain after balancing.")
   }
   if (isTRUE(distance)) {
-    DX.tilde <- as.dist(X[retain.ids, retain.ids])
+    DX.tilde <- as.dist(as.matrix(X)[retain.ids, retain.ids])
   } else {
     X.tilde <- X[retain.ids,]
     DX.tilde = dist(X.tilde, method=dist.method)

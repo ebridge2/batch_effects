@@ -161,7 +161,7 @@ singlenorm.driver <- function(gr.dat, gr.dat.full, cov.dat,
     # exhaustively compute full distance matrix once since $$$
     Dmtx.norm <- as.matrix(parDist(dat.norm, threads=ncores))
     result.site <- causal_ana_site(Dmtx.norm, cov.post, mc.cores=ncores, R=R)
-    result.cov <- causal_ana_cov(Dmtx.norm, cov.post, mc.cores=ncores, R=R)
+    #result.cov <- causal_ana_cov(Dmtx.norm, cov.post, mc.cores=ncores, R=R)
     #result.cov.cont <- causal_ana_cov_cont(Dmtx.norm, cov.dat, mc.cores=ncores)
     result.signal <- signal_ana(dat.norm, cov.post, parcellation=parcellation, mc.cores=ncores,
                                 retain.dims=retain.dims)
@@ -230,27 +230,42 @@ site_pair <- function(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=1000) {
     }
     
     ## Conditional
-    test.cond <- cdcov.test(as.dist(Dmtx.dat.ij), cov.dat.ij$Treatment,
-                             cov.dat.ij %>% dplyr::select(Continent, Sex, Age) %>%
-                               mutate(Continent=as.numeric(Continent), Sex=as.numeric(Sex),
-                                      Age=as.numeric(Age)), R=R)
+    test.cond <- tryCatch({
+      if (length(unique(cov.dat.ij$Continent)) == 1) {
+        z <- cov.dat.ij %>% dplyr::select(Sex, Age) %>%
+          mutate(Sex=as.numeric(Sex),
+                 Age=as.numeric(Age))
+      } else {
+        z <- cov.dat.ij %>% dplyr::select(Continent, Sex, Age) %>%
+          mutate(Sex=as.numeric(Sex), Continent=as.numeric(Continent),
+                 Age=as.numeric(Age))
+      }
+      cond.dcorr(as.dist(Dmtx.dat.ij), cov.dat.ij$Treatment, z, R=R, distance=TRUE)
+    }, error=function(e) {list(Test=list(p.value=NA, statistic=NA))})
     result$cond <- data.frame(Data="Conditional", Method="CDCorr", Dataset.Trt=dset.i,
-                               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.cond$statistic,
-                               p.value=test.cond$p.value, Overlap=ov.ij)
+                               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.cond$Test$statistic,
+                               p.value=test.cond$Test$p.value, Overlap=ov.ij)
     
     # Adjusted Approach. If there is only 1 sex amongst both datasets, omit
-    if (length(unique((cov.dat.ij %>% dplyr::select(Sex))$Sex)) == 1) {
-      form <- "as.factor(Treatment) ~ Age"
-    } else {
-      form <- "as.factor(Treatment) ~ Age + as.factor(Sex)"
-    }
-    if (unique((cov.dat.ij %>% filter(Dataset == dset.i))$Continent) == unique((cov.dat.ij %>% filter(Dataset == dset.j))$Continent)) {
-      result$adj <- adjusted.site_effect(Dmtx.dat.ij, cov.dat.ij, form=form, dset.i=dset.i, dset.j=dset.j, R=R, ov.ij=ov.ij)
-    }
+    test.causal <- tryCatch({
+      if (length(unique(cov.dat.ij$Continent)) == 1) {
+        z <- cov.dat.ij %>% dplyr::select(Sex, Age) %>%
+          mutate(Sex=as.numeric(Sex),
+                 Age=as.numeric(Age))
+      } else {
+        z <- cov.dat.ij %>% dplyr::select(Continent, Sex, Age) %>%
+          mutate(Sex=as.numeric(Sex), Continent=as.numeric(Continent),
+                 Age=as.numeric(Age))
+      }
+      causal.cdcorr(as.dist(Dmtx.dat.ij), cov.dat.ij$Treatment, z, R=R, distance=TRUE)
+    }, error=function(e) {list(Test=list(p.value=NA, statistic=NA))})
+    result$adj <- data.frame(Data="Adjusted", Method="CDCorr", Dataset.Trt=dset.i,
+                             Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=test.causal$Test$statistic,
+                             p.value=test.causal$Test$p.value, Overlap=ov.ij)
     return(do.call(rbind, result) %>%
              mutate(Effect.Name="Site"))
   }, error=function(e) {
-    return(data.frame(Data=c("Associational", "Causal Obs."), Method="CDCorr", Dataset.Trt=dset.i,
+    return(data.frame(Data=c("Associational", "Conditional", "Adjusted"), Method=c("DCorr", "CDCorr", "CDCorr"), Dataset.Trt=dset.i,
               Dataset.Ctrl=dset.j, Effect.Name="Site", Effect=NA, p.value=NA,
               Overlap=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i),
                                       cov.dat.ij %>% filter(Dataset == dset.j))))
@@ -277,9 +292,7 @@ causal_ana_site <- function(Dmtx.dat, cov.dat, trim=.01, R=1000, mc.cores=1) {
     cov.dat.ij <- cov.dat %>%
       filter(Dataset %in% c(dset.i, dset.j)) %>%
       mutate(Treatment = as.numeric(Dataset == dset.i))
-    ov.ij=compute_overlap(cov.dat.ij %>% filter(Dataset == dset.i), cov.dat.ij %>% filter(Dataset == dset.j))
     Dmtx.dat.ij <- Dmtx.dat[cov.dat.ij$id, cov.dat.ij$id]
-    test=site_pair(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=R)
     return(site_pair(Dmtx.dat.ij, cov.dat.ij, dset.i, dset.j, R=R))
   }, mc.cores = mc.cores))
   return(result)
