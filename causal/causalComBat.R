@@ -16,6 +16,7 @@ require(cdcsis)
 require(tidyverse)
 require(nnet)
 require(RCIT)
+require(GeneralisedCovarianceMeasure)
 
 causal.ComBat <- function(X, batches, covariates, match.form, match.args=list(method="nearest", exact=NULL, replace=FALSE, caliper=.1)) {
   retain.ids <- unique(do.call(match_batches, list(batches, covariates, match.form, match.args=match.args)))
@@ -99,18 +100,29 @@ zero_one_dist <- function(Ts) {
   return(dist(Ts_ohe))
 }
 
-cond.RCoT <- function(X, Y, Z, R=1000) {
+cond.RCoT <- function(X, Y, Z, approx="perm") {
   res <- tryCatch({
-    RCoT(X, Y, Z, approx="perm", nrep=R)},
+    RCoT(X, Y, Z, approx=approx)},
     error=function(e) {
+      print(e)
       return(list(stat=NaN, pvalue=NaN))
     })
   return(list(statistic=res$stat, p.value=res$pvalue))
 }
 
-cond.RCoT.kst <- function(X, Ts, covariates, R=1000) {
-  T.ohe <- ohe(Ts)
-  return(cond.RCoT(X, T.ohe, covariates, R=R))
+cond.RCoT.kst <- function(X, Ts, covariates, approx="perm") {
+  T.ohe <- as.matrix(ohe(Ts))
+  return(cond.RCoT(X, T.ohe, covariates, approx=approx))
+}
+
+
+gcm <- function(Y, G, X, R=1000) {
+  res <- tryCatch({
+    gcm.test(as.matrix(Y), as.matrix(G), as.matrix(X), regr.meth="xgboost", nsim=R)},
+    error=function(e) {
+      return(list(stat=NaN, pvalue=NaN))
+    })
+  return(list(statistic=res$test.statistic, p.value=res$p.value))
 }
 
 # Conditional distance correlation from Wang et al., 2015
