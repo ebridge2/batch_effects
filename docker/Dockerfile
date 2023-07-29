@@ -17,3 +17,5 @@ RUN Rscript -e "install.packages('reticulate')"
 RUN . /opt/neuroharm/bin/activate && pip install pandas
 RUN . /opt/neuroharm/bin/activate && pip install statsmodels nibabel
 RUN Rscript -e "install.packages(c('GeneralisedCovarianceMeasure', 'weightedGCM'))"
+RUN Rscript -e "install.packages(c('momentchi2', 'MASS', 'devtools'))"
+RUN Rscript -e "library(devtools); install_github('ericstrobl/RCIT')"
