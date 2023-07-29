@@ -15,6 +15,7 @@ require(sva)
 require(cdcsis)
 require(tidyverse)
 require(nnet)
+require(RCIT)
 
 causal.ComBat <- function(X, batches, covariates, match.form, match.args=list(method="nearest", exact=NULL, replace=FALSE, caliper=.1)) {
   retain.ids <- unique(do.call(match_batches, list(batches, covariates, match.form, match.args=match.args)))
@@ -81,7 +82,7 @@ vm_trim <- function(Ts, covariates) {
   return(balanced_ids)
 }
 
-zero_one_dist <- function(Ts) {
+ohe <- function(Ts) {
   # Convert input vector to a factor
   Ts_fact <- factor(Ts)
   
@@ -90,8 +91,26 @@ zero_one_dist <- function(Ts) {
   
   # Convert the matrix to a data frame (optional)
   Ts_ohe <- as.data.frame(encoded_matrix)
+  return(Ts_ohe)
+}
+zero_one_dist <- function(Ts) {
+  Ts_ohe <- ohe(Ts)
   
-   return(dist(Ts_ohe))
+  return(dist(Ts_ohe))
+}
+
+cond.RCoT <- function(X, Y, Z, R=1000) {
+  res <- tryCatch({
+    RCoT(X, Y, Z, approx="perm", nrep=R)},
+    error=function(e) {
+      return(list(stat=NaN, pvalue=NaN))
+    })
+  return(list(statistic=res$stat, p.value=res$pvalue))
+}
+
+cond.RCoT.kst <- function(X, Ts, covariates, R=1000) {
+  T.ohe <- ohe(Ts)
+  return(cond.RCoT(X, T.ohe, covariates, R=R))
 }
 
 # Conditional distance correlation from Wang et al., 2015
