@@ -150,7 +150,7 @@ dset.ord.site <- dset.ord %>%
   arrange(Continent, n, rev(as.character(Dataset))) %>%
   ungroup() %>% mutate(id=row_number())
 
-results$Site <- results$Site %>%
+results$Site <- readRDS('../data/dcorr/pairwise_figure.rds') %>%
   ungroup() %>%
   mutate(p.value=p.adjust(p.value, method="BH"),
          Dataset.Trt=factor(Dataset.Trt, 
