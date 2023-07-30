@@ -116,9 +116,9 @@ cond.RCoT.kst <- function(X, Ts, covariates, approx="perm") {
 }
 
 
-gcm <- function(Y, G, X, R=1000) {
+gcm <- function(Y, G, X, R=1000, regr.method="xgboost") {
   res <- tryCatch({
-    gcm.test(as.matrix(Y), as.matrix(G), as.matrix(X), regr.meth="xgboost", nsim=R)},
+    gcm.test(as.matrix(Y), as.matrix(G), as.matrix(X), regr.method=regr.method, nsim=R)},
     error=function(e) {
       return(list(stat=NaN, pvalue=NaN))
     })
