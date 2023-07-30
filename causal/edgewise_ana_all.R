@@ -17,7 +17,7 @@ modality <- "fMRI"
 in.file <- sprintf('/base/data/dcorr/inputs_%s_%s_%s.rds', modality, parcellation, cohort)
 preproc <- readRDS(in.file)
 
-methods <- c("Raw", "conditional ComBat")#, "ComBat", "conditional NeuroH")
+methods <- c("ComBat", "conditional NeuroH")#, #("Raw", "conditional ComBat")#, )
 
 preproc.cb <- preproc$`ComBat`
 cov.tab <- preproc.cb$covariates
@@ -77,4 +77,4 @@ res <- do.call(rbind, lapply(methods, function(meth) {
   }, mc.cores = ncores - 1)) %>% mutate(Method=meth)
 })) %>% mutate(Set="All", Cohort=cohort)
 
-saveRDS(res, sprintf('../data/dcorr/outputs_edgewise_all_%s_Raw_CC.rds', cohort))
+saveRDS(res, sprintf('../data/dcorr/outputs_edgewise_all_%s_CN.rds', cohort))
