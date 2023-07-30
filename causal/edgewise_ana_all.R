@@ -1,9 +1,14 @@
+# docker run -ti --entrypoint /bin/bash -v /cis/project/ndmg/batch_effects/:/data -v /cis/home/ebridge2/Documents/research/graphstats_repos/batch_effects/:/base neurodata/batch_effects:0.0.2
+# docker run -ti --entrypoint /bin/bash -v /mnt/nfs2/batch_effects/:/data -v /home/eric/Documents/research/graphstats-repos/batch_effects/:/base neurodata/batch_effects:0.0.2
+# cd /base/
 require(ggplot2)
 require(energy)
 require(parallel)
 require(tidyverse)
 require(mltools)
 require(data.table)
+require(cdcsis)
+source('./causalComBat.R')
 ncores <- parallel::detectCores() - 1
 
 cohort <- "CoRR"
@@ -12,9 +17,12 @@ modality <- "fMRI"
 in.file <- sprintf('/base/data/dcorr/inputs_%s_%s_%s.rds', modality, parcellation, cohort)
 preproc <- readRDS(in.file)
 
-methods <- c("Raw", "conditional ComBat", "ComBat", "conditional NeuroH")
+methods <- c("Raw", "conditional ComBat")#, "ComBat", "conditional NeuroH")
 
-R <- 10000
+preproc.cb <- preproc$`ComBat`
+cov.tab <- preproc.cb$covariates
+
+R <- 1000
 datasets <- unique(cov.tab$Dataset)
 
 pos2coord<-function(pos=NULL, coord=NULL, dim.mat=NULL){
@@ -40,35 +48,33 @@ res <- do.call(rbind, lapply(methods, function(meth) {
   X <- preproc[[meth]]$graphs
   cov.tab <- preproc[[meth]]$covariates
   Y <- cov.tab$Sex
-  DY <- dist(Y)
-  Z <- cov.tab$Age
-  if (meth == "Raw") {
-    # if Raw, account for dataset in partial DCorr
-    Z <- cbind(one_hot(data.table(Dataset=factor(cov.tab$Dataset))),
-               Age=Z)
-    Z.sc <- scale(Z)
-    DZ <- dist(Z.sc)
-  } else {
-    DZ <- dist(Z)
-  }
+  Z <- as.matrix(cov.tab$Age, ncol=1)
+  # if (meth == "Raw") {
+  #    # if Raw, account for dataset in conditional DCorr
+  #    Z <- data.frame(Z)
+  #    Z.sc <- scale(Z)
+  # } else {
+  #  Z.sc <- Z
+  # }
   d <- dim(X)[2]
-  # for each edge, pdcorr(edge, sex | age) or pdcorr(edge, sex | age, dataset)
-  do.call(rbind, mclapply(1:d, function(i) {
+  # for each edge, cdcorr(edge, sex | age) or pdcorr(edge, sex | age)
+  test = do.call(rbind, mclapply(1:d, function(i) {
     i.coord <- pos2coord(i, dim.mat=c(nv, nv))
     # check if coordinate in upper triangle
     if (i.coord[1] > i.coord[2]) {
-      if(i %% 1000 == 0) {
+      Z <- Z[, apply(Z, 2, var) > 0, drop=FALSE]
+      DX <- dist(X[,i])
+      #test <- cond.dcorr(DX, Y, Z, R=R, distance=TRUE)
+      test <- gcm(X[,i,drop=FALSE], as.matrix(ohe(Y)), Z, R=R, regr.method="gam")
+      if(i %% 100 == 0) {
         print(i)
       }
-      DX <- dist(X[,i])
-      test <- pdcor.test(DX, DY, DZ, R=R)
       return(data.frame(Row=i.coord[1], Column=i.coord[2], Edge=i, Statistic=test$statistic,
-                        # p-value computation from energy package doesn't make sense
-                        p.value=(1 + sum(test$replicates >= test$statistic))/(1 + R)))
+                        p.value=test$p.value))
     } else {
       return(NULL)
     }
-  }, mc.cores = ncores)) %>% mutate(Method=meth)
+  }, mc.cores = ncores - 1)) %>% mutate(Method=meth)
 })) %>% mutate(Set="All", Cohort=cohort)
 
-saveRDS(res, sprintf('../data/dcorr/outputs_edgewise_all_%s.rds', cohort))
+saveRDS(res, sprintf('../data/dcorr/outputs_edgewise_all_%s_Raw_CC.rds', cohort))
