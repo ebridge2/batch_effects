@@ -160,6 +160,7 @@ causal.cdcorr <- function(X, Ts, covariates, R=1000, dist.method="euclidean", di
     DX.tilde = dist(X.tilde, method=dist.method)
   }
   Y.tilde <- covariates[retain.ids,]
+  Y.tilde <- Y.tilde[,apply(Y.tilde, 2, var) > 0, drop=FALSE]
   
   DT.tilde = zero_one_dist(Ts[retain.ids])
   

@@ -1,0 +1,291 @@
+---
+title: "Simulations"
+output: html_document
+date: "2023-08-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(sva)
+require(ggplot2)
+require(ggpubr)
+require(grid)
+require(gridExtra)
+
+source('./sim_helpers.R')
+source('./combat_return.R')
+source('./causalComBat.R')
+```
+
+```{r functions}
+n = 400
+batch.cols <- c("0"="#d95f02", "1"="#7570b3")
+sigtype.lt <- c("Expected Signal"="solid", "Cond. ComBat Fit"="dashed")
+overlap.settings <- list("I. High Overlap"=list(n=n, unbalancedness=1),
+                         "II. Moderate Overlap"=list(n=n, unbalancedness=2.5),
+                         "III. Limited Overlap"=list(n=n, unbalancedness=5))
+
+gen.simulations <- function(sim_fn, paramlist=overlap.settings) {
+  simulations=lapply(paramlist, function(params) do.call(sim_fn, params))
+  names(simulations) <- names(paramlist)
+  return(simulations)
+}
+
+get.scatterplot_df <- function(raw_dat) {
+  do.call(rbind, lapply(names(raw_dat), function(sim_setting) {
+    raw_sim <- raw_dat[[sim_setting]]
+    data.frame(X=raw_sim$X, Y=raw_sim$Y, Batch=raw_sim$Batch, Setting=sim_setting)
+  }))
+}
+
+plt.raw_dat <- function(raw_df, title="") {
+  raw_df %>% 
+  ggplot(aes(x=X, y=Y, color=factor(Batch))) +
+    geom_point(alpha=0.5) +
+    facet_grid(Setting~., switch="y") +
+    scale_x_continuous(name="Covariate", breaks=c(-1, 0, 1)) +
+    scale_y_continuous(name="Outcome", limits=c(min(raw_df$Y) - .1, max(raw_df$Y) + .1)) +
+    scale_color_manual(name="Batch", values=batch.cols) +
+    theme_bw() +
+    ggtitle(title) +
+    theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(),
+          strip.background=element_blank(), text=element_text(size=13),
+          axis.text.y=element_blank(), axis.ticks.y=element_blank())
+}
+
+get.true_signal <- function(raw_dat) {
+  result <- lapply(names(raw_dat), function(sim_setting) {
+    raw_sim <- raw_dat[[sim_setting]]
+    data.frame(X=raw_sim$Xtrue, Y=raw_sim$Ytrue, Batch=raw_sim$Ttrue, Setting=sim_setting)
+  })
+  names(result) <- names(raw_dat)
+  return(result)
+}
+
+get.true_signal_df <- function(sig_list) {
+   do.call(rbind, sig_list) %>% mutate(Signal="Expected Signal")
+}
+
+fit.cComBat <- function(raw_dat) {
+  fit_mods <- lapply(raw_dat, function(sim) {
+    testdat <- t(cbind(sim$Y, rnorm(n)))
+    
+    cor.sim.cb <- ComBat_return_model(testdat, as.vector(sim$Batch), mod=model.matrix(~1 + sim$X))
+    cor.sim.cb$xbounds <- c(min(sim$X), max(sim$X))
+    return(cor.sim.cb)
+  })
+  names(fit_mods) <- names(raw_dat)
+  return(fit_mods)
+}
+
+fit.caus_cComBat <- function(raw_dat) {
+  fit_mods <- lapply(names(raw_dat), function(simn) {
+    sim <- raw_dat[[simn]]
+    tryCatch({
+      retain.ids <- unique(do.call(match_batches, list(sim$Batch, data.frame(Covar=sim$X), "Covar",
+                                                       match.args=list(method="nearest", exact=NULL,
+                                                                       replace=FALSE, caliper=.1))))
+      X.tilde <- sim$X[retain.ids]; Y.tilde <- sim$Y[retain.ids]; T.tilde <- sim$Batch[retain.ids]
+      
+      cor.sim.ccb <- ComBat_return_model(t(cbind(Y.tilde, rnorm(length(Y.tilde)))), 
+                                         as.vector(T.tilde), mod=model.matrix(~1 + X.tilde))
+      cor.sim.ccb$xbounds <- c(min(X.tilde), max(X.tilde))
+      return(cor.sim.ccb)
+    }, error=function(e) {print(sprintf("Failed %s.", simn)); return(NULL)})
+  })
+  names(fit_mods) <- names(raw_dat)
+  return(fit_mods)
+}
+
+fit.linfit_lines <- function(true_sig, mod_fits) {
+  if (any(names(true_sig) != names(mod_fits))) {
+    stop("You have not fit a model for the same set of simulations.")
+  }
+  do.call(rbind, lapply(names(true_sig), function(sim_setting) {
+    sim.expected.setting <- true_sig[[sim_setting]]
+    mod.setting <- mod_fits[[sim_setting]]
+    retain.ids <- which(sim.expected.setting$X >= mod.setting$xbounds[1] & 
+                          sim.expected.setting$X <= mod.setting$xbounds[2])
+    X.tilde <- sim.expected.setting$X[retain.ids]; Y.tilde <- sim.expected.setting$Y[retain.ids]
+    T.tilde <- sim.expected.setting$Batch[retain.ids]
+    T.design <- ohe(as.vector(T.tilde)); colnames(T.design) <- c(sapply(c(0, 1), function(b) {sprintf("batch%d", b)}))
+    
+    fit.true_covars <- (as.matrix(cbind(T.design, X.tilde)) %*% mod.setting$B.hat)[,1]
+    return(data.frame(X=X.tilde, Batch=T.tilde, Y=fit.true_covars, Setting=sim_setting))
+  })) %>% mutate(Signal="Cond. ComBat fit")
+}
+
+plt.exp_sigs <- function(true_df, linfit_df, title="") {
+  batch_effect_df <- true_df %>%
+    filter(Signal == "Expected Signal") %>%
+    pivot_wider(names_from=Batch, values_from=Y) %>%
+    group_by(X, Setting) %>%
+    mutate(ymin=min(`0`, `1`), ymax=max(`0`, `1`))
+  
+  ggplot(rbind(true_df, linfit_df), aes(x=X)) +
+    geom_ribbon(data=batch_effect_df, aes(ymin=ymin, ymax=ymax), alpha=0.3, color="gray") +
+    geom_line(linewidth=1.3, aes(y=Y, color=factor(Batch), linetype=factor(Signal))) +
+    facet_grid(Setting~., switch="y") +
+    scale_linetype_manual(name="Batch", values=c(2, 1)) +
+    scale_x_continuous(name="Covariate", breaks=c(-1, 0, 1)) +
+    scale_y_continuous(name="Outcome", limits=c(min(sig.raw_df$Y) - .1, max(sig.raw_df$Y) + .1)) +
+    scale_color_manual(name="Batch", values=batch.cols) +
+    theme_bw() +
+    ggtitle(title) +
+    theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(),
+          strip.background=element_blank(), text=element_text(size=13),
+          axis.text.y=element_blank(), axis.ticks.y=element_blank())
+}
+
+apply.cComBat <- function(true_sig, mod_fits) {
+  if (any(names(true_sig) != names(mod_fits))) {
+    stop("You have not fit a model for the same set of simulations.")
+  }
+  do.call(rbind, lapply(names(true_sig), function(sim_setting) {
+    print(sim_setting)
+    sim.expected.setting <- true_sig[[sim_setting]]
+    mod.setting <- mod_fits[[sim_setting]]
+    if (is.null(mod.setting)) {
+      print(sprintf("No model fit for %s. Skipping...", sim_setting))
+      return(data.frame(X=NA, Batch=NA, Y=NA, Setting=sim_setting))
+    }
+    retain.ids <- which(sim.expected.setting$X >= mod.setting$xbounds[1] & 
+                          sim.expected.setting$X <= mod.setting$xbounds[2])
+    X.tilde <- sim.expected.setting$X[retain.ids]; Y.tilde <- sim.expected.setting$Y[retain.ids]
+    T.tilde <- sim.expected.setting$Batch[retain.ids]
+    T.design <- ohe(as.vector(T.tilde)); colnames(T.design) <- c(sapply(c(0, 1), function(b) {sprintf("batch%d", b)}))
+    
+    T.tilde.locs <- lapply(c(0, 1), function(i) which(T.tilde == i))
+    fit.exp <- apply_batch_adjustment(data=t(cbind(Y.tilde, rep(0, length(Y.tilde)))),
+                           batches = T.tilde.locs, design = T.design, gamma = mod.setting$Gamma, 
+                           delta = mod.setting$Delta, N=mod.setting$N, var.pooled = mod.setting$Var, 
+                           grand.mean = mod.setting$Grand.mean, B.hat = mod.setting$B.hat, 
+                           mod = model.matrix(~1 + X.tilde))
+    return(data.frame(X=X.tilde, Batch=T.tilde, Y=fit.exp[,1], Setting=sim_setting))
+  })) %>% mutate(Signal="Expected Signal")
+}
+
+plt.corrected_true <- function(cor_true_adj, title="") {
+  resid_df <- cor_true_adj %>%
+    pivot_wider(names_from=Batch, values_from=Y) %>%
+    group_by(X, Setting) %>%
+    mutate(ymin=min(`0`, `1`), ymax=max(`0`, `1`))
+    
+  ggplot(cor_true_adj, aes(x=X)) +
+    geom_ribbon(data=resid_df, aes(ymin=ymin, ymax=ymax), alpha=0.5, color="red", fill="red") +
+    geom_line(linewidth=1.3, aes(y=Y, color=factor(Batch))) +
+    facet_grid(Setting~., switch="y") +
+    scale_linetype_manual(name="Batch", values=c(2, 1)) +
+    scale_x_continuous(name="Covariate", breaks=c(-1, 0, 1)) +
+    scale_y_continuous(name="Outcome", limits=c(min(sig.raw_df$Y) - .1, max(sig.raw_df$Y) + .1)) +
+    scale_color_manual(name="Batch", values=batch.cols) +
+    theme_bw() +
+    ggtitle(title) +
+    theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(),
+          strip.background=element_blank(), text=element_text(size=13),
+          axis.text.y=element_blank(), axis.ticks.y=element_blank())
+}
+
+plt.combine_plots <- function(col1, col2, col3, col4,
+                              title="") {
+  sep_plts <- lapply(list(col1, col2, col3, col4), function(col) {
+    leg = get_legend(col)
+    plt <- col + theme(legend.position="none")
+    return(list(Plot=plt, Legend=leg))
+  })
+  
+  plots <- do.call(ggarrange, c(lapply(sep_plts, function(i) {i$Plot}), ncol=length(sep_plts)))
+  
+  return(annotate_figure(plots, top=text_grob(title, size=20, hjust=0, x=0)))
+}
+```
+
+
+# Sigmoidal Simulation
+
+```{r setup, include=FALSE}
+sig.raw_dat <- gen.simulations(sim_sigmoid)
+sig.raw_df <- get.scatterplot_df(sig.raw_dat)
+
+sig.col1 <- plt.raw_dat(sig.raw_df, title="(A) Raw")
+
+sig.true_list <- get.true_signal(sig.raw_dat)
+sig.true_df <- get.true_signal_df(sig.true_list)
+
+sig.fit_combat <- fit.cComBat(sig.raw_dat)
+sig.fit_caus_combat <- fit.caus_cComBat(sig.raw_dat)
+sig.linfit_df <- fit.linfit_lines(sig.true_list, sig.fit_combat)
+
+sig.col2 <- plt.exp_sigs(sig.true_df, sig.linfit_df, title="(B) Signal")
+
+sig.cc_true_adj <- apply.cComBat(sig.true_list, sig.fit_combat)
+sig.caus.cc_true_adj <- apply.cComBat(sig.true_list, sig.fit_caus_combat)
+
+sig.col3 <- plt.corrected_true(sig.cc_true_adj, title="(C) Cond. ComBat")
+sig.col4 <- plt.corrected_true(sig.caus.cc_true_adj, title="(D) Causal ComBat")
+```
+
+```{r, width=11.5, height=5.5}
+suptitle = "Non-causal batch adjustment procedures fail with heterogeneous covariate distributions"
+plt.combine_plots(sig.col1, sig.col2, sig.col3, sig.col4, title=suptitle)
+```
+
+
+# Linear Simulation
+
+```{r setup, include=FALSE}
+lin.raw_dat <- gen.simulations(sim_linear)
+lin.raw_df <- get.scatterplot_df(lin.raw_dat)
+
+lin.col1 <- plt.raw_dat(lin.raw_df, title="(A) Raw")
+
+lin.true_list <- get.true_signal(lin.raw_dat)
+lin.true_df <- get.true_signal_df(lin.true_list)
+
+lin.fit_combat <- fit.cComBat(lin.raw_dat)
+lin.fit_caus_combat <- fit.caus_cComBat(lin.raw_dat)
+lin.linfit_df <- fit.linfit_lines(lin.true_list, lin.fit_combat)
+
+lin.col2 <- plt.exp_sigs(lin.true_df, lin.linfit_df, title="(B) Signal")
+
+lin.cc_true_adj <- apply.cComBat(lin.true_list, lin.fit_combat)
+lin.caus.cc_true_adj <- apply.cComBat(lin.true_list, lin.fit_caus_combat)
+
+lin.col3 <- plt.corrected_true(lin.cc_true_adj, title="(C) Cond. ComBat")
+lin.col4 <- plt.corrected_true(lin.caus.cc_true_adj, title="(D) Causal ComBat")
+```
+
+```{r}
+suptitle = "Correct model specification yields successful batch effect removal"
+plt.combine_plots(lin.col1, lin.col2, lin.col3, lin.col4, title=suptitle)
+```
+
+# Non-Monotone Simulation
+
+```{r setup, include=FALSE}
+imp.raw_dat <- gen.simulations(sim_impulse)
+imp.raw_df <- get.scatterplot_df(imp.raw_dat)
+
+imp.col1 <- plt.raw_dat(imp.raw_df, title="(A) Raw")
+
+imp.true_list <- get.true_signal(imp.raw_dat)
+imp.true_df <- get.true_signal_df(imp.true_list)
+
+imp.fit_combat <- fit.cComBat(imp.raw_dat)
+imp.fit_caus_combat <- fit.caus_cComBat(imp.raw_dat)
+imp.linfit_df <- fit.linfit_lines(imp.true_list, imp.fit_combat)
+
+imp.col2 <- plt.exp_sigs(imp.true_df, imp.linfit_df, title="(B) Signal")
+
+imp.cc_true_adj <- apply.cComBat(imp.true_list, imp.fit_combat)
+imp.caus.cc_true_adj <- apply.cComBat(imp.true_list, imp.fit_caus_combat)
+
+imp.col3 <- plt.corrected_true(imp.cc_true_adj, title="(C) Cond. ComBat")
+imp.col4 <- plt.corrected_true(imp.caus.cc_true_adj, title="(D) Causal ComBat")
+```
+
+
+```{r}
+suptitle = "Non-monotone settings share issues with non-linearities under model misspecification"
+plt.combine_plots(imp.col1, imp.col2, imp.col3, imp.col4, title=suptitle)
+```
